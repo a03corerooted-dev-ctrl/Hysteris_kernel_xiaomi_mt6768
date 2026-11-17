@@ -91,20 +91,34 @@ static bool tick_check_broadcast_device(struct clock_event_device *curdev,
  */
 void tick_install_broadcast_device(struct clock_event_device *dev)
 {
-	struct clock_event_device *cur = tick_broadcast_device.evtdev;
+	struct clock_event_device *cur;
+	unsigned long flags;
+	bool changed = false;
 
+	raw_spin_lock_irqsave(&tick_broadcast_lock, flags);
+
+	cur = tick_broadcast_device.evtdev;
 	if (!tick_check_broadcast_device(cur, dev))
-		return;
+		goto out_unlock;
 
 	if (!try_module_get(dev->owner))
-		return;
+		goto out_unlock;
 
-	clockevents_exchange_device(cur, dev);
+	__clockevents_exchange_device(cur, dev);
 	if (cur)
 		cur->event_handler = clockevents_handle_noop;
-	tick_broadcast_device.evtdev = dev;
+	WRITE_ONCE(tick_broadcast_device.evtdev, dev);
 	if (!cpumask_empty(tick_broadcast_mask))
 		tick_broadcast_start_periodic(dev);
+	changed = true;
+
+out_unlock:
+	raw_spin_unlock_irqrestore(&tick_broadcast_lock, flags);
+
+	/* Drop the old device reference only after releasing the broadcast lock. */
+	if (changed && cur)
+		module_put(cur->owner);
+
 	/*
 	 * Inform all cpus about this. We might be in a situation
 	 * where we did not switch to oneshot mode because the per cpu
@@ -113,7 +127,7 @@ void tick_install_broadcast_device(struct clock_event_device *dev)
 	 * notification the systems stays stuck in periodic mode
 	 * forever.
 	 */
-	if (dev->features & CLOCK_EVT_FEAT_ONESHOT)
+	if (changed && (dev->features & CLOCK_EVT_FEAT_ONESHOT))
 		tick_clock_notify();
 }
 
@@ -714,7 +728,7 @@ int __tick_broadcast_oneshot_control(enum tick_broadcast_state state)
 	 * If there is no broadcast device, tell the caller not to go
 	 * into deep idle.
 	 */
-	if (!tick_broadcast_device.evtdev)
+	if (!READ_ONCE(tick_broadcast_device.evtdev))
 		return -EBUSY;
 
 	dev = this_cpu_ptr(&tick_cpu_device)->evtdev;
@@ -1012,7 +1026,7 @@ int tick_broadcast_oneshot_active(void)
  */
 bool tick_broadcast_oneshot_available(void)
 {
-	struct clock_event_device *bc = tick_broadcast_device.evtdev;
+	struct clock_event_device *bc = READ_ONCE(tick_broadcast_device.evtdev);
 
 	return bc ? bc->features & CLOCK_EVT_FEAT_ONESHOT : false;
 }
@@ -1020,7 +1034,7 @@ bool tick_broadcast_oneshot_available(void)
 #else
 int __tick_broadcast_oneshot_control(enum tick_broadcast_state state)
 {
-	struct clock_event_device *bc = tick_broadcast_device.evtdev;
+	struct clock_event_device *bc = READ_ONCE(tick_broadcast_device.evtdev);
 
 	if (!bc || (bc->features & CLOCK_EVT_FEAT_HRTIMER))
 		return -EBUSY;
