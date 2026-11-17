@@ -15,11 +15,14 @@
 #ifndef _REQUEST_SOCK_H
 #define _REQUEST_SOCK_H
 
+#include <linux/compiler.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/bug.h>
 #include <linux/refcount.h>
+
+#include <asm/byteorder.h>
 
 #include <net/sock.h>
 
@@ -65,8 +68,13 @@ struct request_sock {
 	struct request_sock		*dl_next;
 	u16				mss;
 	u8				num_retrans; /* number of retransmits */
-	u8				cookie_ts:1; /* syncookie: encode tcpopts in timestamp */
-	u8				num_timeout:7; /* number of timeouts */
+	union {
+		struct {
+			u8			cookie_ts:1; /* syncookie: encode tcpopts in timestamp */
+			u8			num_timeout:7; /* number of timeouts */
+		};
+		u8			num_timeout_cookie_ts;
+	};
 	u32				ts_recent;
 	struct timer_list		rsk_timer;
 	const struct request_sock_ops	*rsk_ops;
@@ -75,6 +83,18 @@ struct request_sock {
 	u32				secid;
 	u32				peer_secid;
 };
+
+/* Read the complete bitfield storage byte before extracting num_timeout. */
+static inline u8 reqsk_num_timeout(const struct request_sock *req)
+{
+	u8 num_timeout = READ_ONCE(req->num_timeout_cookie_ts);
+
+#if defined(__LITTLE_ENDIAN_BITFIELD)
+	return num_timeout >> 1;
+#else
+	return num_timeout & 0x7f;
+#endif
+}
 
 static inline struct request_sock *inet_reqsk(const struct sock *sk)
 {

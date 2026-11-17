@@ -755,7 +755,9 @@ static void reqsk_timer_handler(struct timer_list *t)
 	if (inet_sk_state_load(sk_listener) != TCP_LISTEN)
 		goto drop;
 
-	max_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
+	max_retries = READ_ONCE(icsk->icsk_syn_retries) ? :
+		READ_ONCE(net->ipv4.sysctl_tcp_synack_retries);
+	max_retries = min_t(int, max_retries, MAX_TCP_SYNACK_RETRIES);
 	thresh = max_retries;
 	/* Normally all the openreqs are young and become mature
 	 * (i.e. converted to established socket) for first timeout.
@@ -785,7 +787,8 @@ static void reqsk_timer_handler(struct timer_list *t)
 			young <<= 1;
 		}
 	}
-	defer_accept = READ_ONCE(queue->rskq_defer_accept);
+	defer_accept = min_t(u8, READ_ONCE(queue->rskq_defer_accept),
+			     MAX_TCP_SYNACK_RETRIES);
 	if (defer_accept)
 		max_retries = defer_accept;
 	syn_ack_recalc(req, thresh, max_retries, defer_accept,
@@ -799,7 +802,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 
 		if (req->num_timeout++ == 0)
 			atomic_dec(&queue->young);
-		timeo = min(TCP_TIMEOUT_INIT << req->num_timeout, TCP_RTO_MAX);
+		timeo = tcp_synack_timeout(req);
 		mod_timer(&req->rsk_timer, jiffies + timeo);
 		return;
 	}

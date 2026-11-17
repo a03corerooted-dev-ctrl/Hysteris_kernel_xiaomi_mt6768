@@ -146,6 +146,20 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define TCP_TIMEOUT_MIN_US (2*USEC_PER_MSEC) /* Min TCP timeout in microsecs */
 
 #define TCP_TIMEOUT_INIT ((unsigned)(1*HZ))	/* RFC6298 2.1 initial RTO value	*/
+
+/* Saturating SYN-ACK backoff: never shift past the representable timeout. */
+static inline unsigned long tcp_synack_timeout(const struct request_sock *req)
+{
+	u64 timeout = TCP_TIMEOUT_INIT;
+	u64 rto_max = TCP_RTO_MAX;
+	u8 num_timeout = reqsk_num_timeout(req);
+
+	if (num_timeout >= sizeof(timeout) * 8 ||
+	    timeout > (rto_max >> num_timeout))
+		return TCP_RTO_MAX;
+
+	return (unsigned long)(timeout << num_timeout);
+}
 #define TCP_TIMEOUT_FALLBACK ((unsigned)(3*HZ))	/* RFC 1122 initial RTO value, now
 						 * used as a fallback RTO for the
 						 * initial data transmission if no
@@ -164,6 +178,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define MAX_TCP_KEEPINTVL	32767
 #define MAX_TCP_KEEPCNT		127
 #define MAX_TCP_SYNCNT		127
+#define MAX_TCP_SYNACK_RETRIES	127 /* request_sock::num_timeout is 7 bits */
 
 #define TCP_SYNQ_INTERVAL	(HZ/5)	/* Period of SYNACK timer */
 
