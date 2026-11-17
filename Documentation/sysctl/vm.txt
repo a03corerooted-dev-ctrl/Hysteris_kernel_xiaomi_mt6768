@@ -67,6 +67,7 @@ Currently, these files are in /proc/sys/vm:
 - vfs_cache_pressure
 - watermark_scale_factor
 - zone_reclaim_mode
+- want_old_faultaround_pte
 
 ==============================================================
 
@@ -942,5 +943,20 @@ of other processes running on other nodes will not be affected.
 Allowing regular swap effectively restricts allocations to the local
 node unless explicitly overridden by memory policies or cpuset
 configurations.
+
+
+=============================================================
+
+want_old_faultaround_pte:
+
+Controls the aging of file-backed pages mapped by faultaround. When set to 1,
+the page that caused the fault is marked young, while neighboring pages mapped
+speculatively by faultaround are marked old. This allows reclaim to distinguish
+prefetched pages from pages that were actually accessed, which can reduce
+unnecessary eviction of other useful pages under memory pressure.
+
+Set to 0 to retain the legacy behavior. The default in this experimental
+integration is 1. This can increase minor-fault and page-walk work for some
+access patterns, so benchmark real workloads before keeping it enabled.
 
 ============ End of Document =================================
