@@ -2335,6 +2335,49 @@ enum scan_balance {
  * nr[0] = anon inactive pages to scan; nr[1] = anon active pages to scan
  * nr[2] = file inactive pages to scan; nr[3] = file active pages to scan
  */
+#ifdef CONFIG_SWAP
+/*
+ * GFP_NOIO reclaim cannot put anonymous pages into swapcache.  When
+ * swapcache is tiny compared to the anon LRU, scanning anon pages is
+ * unlikely to reclaim anything and only adds latency.
+ *
+ * Linux 4.19 does not account NR_SWAPCACHE in lruvec/node vmstat, so use
+ * total_swapcache_pages().  This is deliberately conservative for memcg
+ * reclaim: swapcache belonging to other cgroups can suppress the heuristic,
+ * but cannot cause an unsafe skip.
+ */
+static bool reclaimable_anon_is_low(struct lruvec *lruvec,
+				    struct mem_cgroup *memcg,
+				    struct scan_control *sc)
+{
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+	unsigned long anon_pages;
+	unsigned long swapcache;
+
+	if (!sc || (sc->gfp_mask & __GFP_IO))
+		return false;
+
+	if (memcg) {
+		anon_pages = lruvec_page_state(lruvec, NR_INACTIVE_ANON) +
+			     lruvec_page_state(lruvec, NR_ACTIVE_ANON);
+	} else {
+		anon_pages = node_page_state(pgdat, NR_INACTIVE_ANON) +
+			     node_page_state(pgdat, NR_ACTIVE_ANON);
+	}
+
+	swapcache = total_swapcache_pages();
+
+	return swapcache < (anon_pages >> 6);
+}
+#else
+static inline bool reclaimable_anon_is_low(struct lruvec *lruvec,
+					   struct mem_cgroup *memcg,
+					   struct scan_control *sc)
+{
+	return true;
+}
+#endif /* CONFIG_SWAP */
+
 static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 			   struct scan_control *sc, unsigned long *nr,
 			   unsigned long *lru_pages)
@@ -2351,7 +2394,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	enum lru_list lru;
 
 	/* If we have no swap space, do not bother scanning anon pages. */
-	if (!sc->may_swap || mem_cgroup_get_nr_swap_pages(memcg) <= 0) {
+	if (!sc->may_swap || mem_cgroup_get_nr_swap_pages(memcg) <= 0 ||
+	    reclaimable_anon_is_low(lruvec, memcg, sc)) {
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
