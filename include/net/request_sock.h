@@ -233,7 +233,7 @@ static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue 
 static inline void reqsk_queue_removed(struct request_sock_queue *queue,
 				       const struct request_sock *req)
 {
-	if (req->num_timeout == 0)
+	if (reqsk_num_timeout(req) == 0)
 		atomic_dec(&queue->young);
 	atomic_dec(&queue->qlen);
 }
