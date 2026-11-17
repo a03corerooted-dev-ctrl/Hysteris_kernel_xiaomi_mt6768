@@ -569,12 +569,12 @@ void clockevents_handle_noop(struct clock_event_device *dev)
 }
 
 /**
- * clockevents_exchange_device - release and request clock devices
+ * __clockevents_exchange_device - detach and replace clock event devices
  * @old:	device to release (can be NULL)
  * @new:	device to request (can be NULL)
  *
- * Called from various tick functions with clockevents_lock held and
- * interrupts disabled.
+ * Caller must hold clockevents_lock with interrupts disabled.
+ * The old device module reference is released by the caller.
  */
 void __clockevents_exchange_device(struct clock_event_device *old,
 				   struct clock_event_device *new)
