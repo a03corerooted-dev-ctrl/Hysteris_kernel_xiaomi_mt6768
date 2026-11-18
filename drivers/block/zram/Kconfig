@@ -45,6 +45,6 @@ config ZRAM_MULTI_COMP
 	depends on ZRAM
 	help
 	  Enable secondary compression algorithms and manual page recompression.
-	  This can improve memory savings for incompressible or idle pages at the
-	  cost of additional CPU time. Idle-page recompression requires
-	  ZRAM_MEMORY_TRACKING.
+	  This can improve memory savings for huge or idle pages at the cost of
+	  additional CPU time. Idle pages can be marked through the zram idle
+	  attribute; CONFIG_ZRAM_MEMORY_TRACKING additionally exposes timestamps.
