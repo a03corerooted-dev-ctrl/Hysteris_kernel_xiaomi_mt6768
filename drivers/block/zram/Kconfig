@@ -42,7 +42,7 @@ config ZRAM_MEMORY_TRACKING
 
 config ZRAM_MULTI_COMP
 	bool "Enable multiple compression streams"
-	depends on ZRAM
+	depends on ZRAM && 64BIT
 	help
 	  Enable secondary compression algorithms and manual page recompression.
 	  This can improve memory savings for huge or idle pages at the cost of
