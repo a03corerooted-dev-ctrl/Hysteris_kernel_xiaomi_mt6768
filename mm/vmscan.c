@@ -52,6 +52,7 @@
 #include <linux/psi.h>
 #include <linux/sysfs.h>
 #include <linux/atomic.h>
+#include <linux/spinlock.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -2348,16 +2349,12 @@ enum scan_balance {
 
 static unsigned long memory_boost_expires;
 
-static bool memory_boost_active(struct pglist_data *pgdat)
+static bool file_cache_has_reclaim_reserve(struct pglist_data *pgdat)
 {
-	unsigned long expires = READ_ONCE(memory_boost_expires);
 	unsigned long file_pages;
 	unsigned long min_file_pages;
 	unsigned long high_wmark = 0;
 	int z;
-
-	if (!expires || time_after_eq(jiffies, expires))
-		return false;
 
 	file_pages = node_page_state(pgdat, NR_ACTIVE_FILE) +
 		     node_page_state(pgdat, NR_INACTIVE_FILE);
@@ -2374,7 +2371,18 @@ static bool memory_boost_active(struct pglist_data *pgdat)
 	 * present pages or its aggregate high watermark, whichever is larger.
 	 */
 	min_file_pages = max(pgdat->node_present_pages / 20, high_wmark);
-	if (file_pages <= min_file_pages) {
+
+	return file_pages > min_file_pages;
+}
+
+static bool memory_boost_active(struct pglist_data *pgdat)
+{
+	unsigned long expires = READ_ONCE(memory_boost_expires);
+
+	if (!expires || time_after_eq(jiffies, expires))
+		return false;
+
+	if (!file_cache_has_reclaim_reserve(pgdat)) {
 		/* Do not cancel a newer userspace request racing this check. */
 		cmpxchg(&memory_boost_expires, expires, 0);
 		return false;
@@ -2382,6 +2390,85 @@ static bool memory_boost_active(struct pglist_data *pgdat)
 
 	return true;
 }
+
+/*
+ * Detect sustained swap churn using the same PSWPIN/PSWPOUT event pair
+ * used by the MTK GMO reclaim implementation. Sampling is serialized and
+ * counter resets are treated as a new baseline.
+ *
+ * VM event counters are approximate. This detector is advisory, kswapd-only,
+ * and never blocks reclaim.
+ */
+#define SWAP_THRASH_EVENTS_PER_SEC	12000UL
+#define SWAP_THRASH_SAMPLE_INTERVAL	max_t(unsigned long, 1, HZ >> 3)
+#define SWAP_THRASH_HOLD_TIME		HZ
+#define SWAP_THRASH_SWAPPINESS		40
+
+static unsigned long swap_thrash_expires;
+
+#ifdef CONFIG_VM_EVENT_COUNTERS
+static DEFINE_SPINLOCK(swap_thrash_lock);
+static unsigned long swap_thrash_last_sample;
+static unsigned long swap_thrash_last_events;
+static unsigned long swap_thrash_next_sample;
+
+static bool swap_thrash_active(void)
+{
+	unsigned long now = jiffies;
+	unsigned long flags;
+	unsigned long events = 0;
+	unsigned long elapsed;
+	unsigned long min_events;
+	bool active;
+	int cpu;
+
+	/* Most reclaim passes reuse the cached result without taking a lock. */
+	if (time_before(now, READ_ONCE(swap_thrash_next_sample)))
+		return time_before(now, READ_ONCE(swap_thrash_expires));
+
+	spin_lock_irqsave(&swap_thrash_lock, flags);
+	if (time_after_eq(now, swap_thrash_next_sample)) {
+		for_each_online_cpu(cpu) {
+			struct vm_event_state *this =
+					&per_cpu(vm_event_states, cpu);
+
+			events += READ_ONCE(this->event[PSWPIN]);
+			events += READ_ONCE(this->event[PSWPOUT]);
+		}
+
+		if (swap_thrash_last_sample) {
+			elapsed = now - swap_thrash_last_sample;
+
+			/*
+			 * CPU hotplug can make a per-CPU snapshot move backwards.
+			 * Reset the baseline instead of interpreting that as wrap.
+			 */
+			if (elapsed && events >= swap_thrash_last_events) {
+				min_events = SWAP_THRASH_EVENTS_PER_SEC *
+					     (elapsed + 1) / HZ;
+				if (events - swap_thrash_last_events > min_events)
+					WRITE_ONCE(swap_thrash_expires,
+						   now + SWAP_THRASH_HOLD_TIME);
+			}
+		}
+
+		swap_thrash_last_events = events;
+		swap_thrash_last_sample = now;
+		WRITE_ONCE(swap_thrash_next_sample,
+			   now + SWAP_THRASH_SAMPLE_INTERVAL);
+	}
+
+	active = time_before(now, READ_ONCE(swap_thrash_expires));
+	spin_unlock_irqrestore(&swap_thrash_lock, flags);
+
+	return active;
+}
+#else
+static inline bool swap_thrash_active(void)
+{
+	return false;
+}
+#endif /* CONFIG_VM_EVENT_COUNTERS */
 
 #ifdef CONFIG_SYSFS
 static ssize_t memory_boost_show(struct kobject *kobj,
@@ -2415,8 +2502,20 @@ static ssize_t memory_boost_store(struct kobject *kobj,
 static struct kobj_attribute memory_boost_attr =
 	__ATTR(memory_boost, 0644, memory_boost_show, memory_boost_store);
 
+static ssize_t swap_thrash_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	bool active = time_before(jiffies, READ_ONCE(swap_thrash_expires));
+
+	return sprintf(buf, "%d\\n", active ? 1 : 0);
+}
+
+static struct kobj_attribute swap_thrash_attr =
+	__ATTR(swap_thrash, 0444, swap_thrash_show, NULL);
+
 static struct attribute *vmscan_attrs[] = {
 	&memory_boost_attr.attr,
+	&swap_thrash_attr.attr,
 	NULL,
 };
 
@@ -2590,6 +2689,16 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
+
+	/*
+	 * Sustained swap churn suggests that further anonymous reclaim is
+	 * cycling pages through swap. Apply a bounded, proportional bias toward
+	 * file reclaim only while the file cache remains above its reserve.
+	 * Unlike the launch boost, this does not force SCAN_FILE exclusively.
+	 */
+	if (current_is_kswapd() && global_reclaim(sc) &&
+	    swap_thrash_active() && file_cache_has_reclaim_reserve(pgdat))
+		swappiness = min(swappiness, SWAP_THRASH_SWAPPINESS);
 
 	scan_balance = SCAN_FRACT;
 
