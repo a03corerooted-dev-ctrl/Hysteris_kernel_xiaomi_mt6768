@@ -260,8 +260,8 @@ To use the feature, admin should set up backing device via
 	"echo /dev/sda5 > /sys/block/zramX/backing_dev"
 
 before disksize setting. It supports only partition at this moment.
-If admin want to use incompressible page writeback with
-CONFIG_ZRAM_MULTI_COMP, they can use:
+If admin want to use incompressible page writeback with both
+CONFIG_ZRAM_WRITEBACK and CONFIG_ZRAM_MULTI_COMP enabled, they can use:
 
 	"echo incompressible > /sys/block/zramX/writeback"
 
@@ -342,7 +342,7 @@ requests recompression through the recompress sysfs attribute.
 The normal MT6768 defconfig leaves this feature disabled. An experimental
 build can merge the optional fragment with the normal defconfig:
 
-	scripts/kconfig/merge_config.sh \
+	ARCH=arm64 scripts/kconfig/merge_config.sh \
 		arch/arm64/configs/vendor/mt6768_defconfig \
 		arch/arm64/configs/vendor/mt6768_multicomp.config
 
@@ -418,7 +418,9 @@ Third column is state of the block.
 (s: same page
 w: written page to backing store
 h: huge page
-i: idle page)
+i: idle page
+r: recompressed using a secondary algorithm
+n: no secondary algorithm reduced its zsmalloc size class)
 
 First line of above example says 300th block is accessed at 75.033841sec
 and the block's state is huge so it is written back to the backing
