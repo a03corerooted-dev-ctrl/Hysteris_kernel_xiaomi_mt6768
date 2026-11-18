@@ -2507,7 +2507,7 @@ static ssize_t swap_thrash_show(struct kobject *kobj,
 {
 	bool active = time_before(jiffies, READ_ONCE(swap_thrash_expires));
 
-	return sprintf(buf, "%d\\n", active ? 1 : 0);
+	return sprintf(buf, "%d\n", active ? 1 : 0);
 }
 
 static struct kobj_attribute swap_thrash_attr =
