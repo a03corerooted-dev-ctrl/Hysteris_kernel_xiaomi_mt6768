@@ -1853,7 +1853,19 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 
 		SetPageLRU(page);
 		lru = page_lru(page);
-		add_page_to_lru_list(page, lruvec, lru);
+
+		/*
+		 * Writeback can complete while reclaim is still processing this
+		 * isolated batch. rotate_reclaimable_page() cannot move an
+		 * isolated page, so restore the missed rotation when the page
+		 * is clean, unreferenced and has no unexpected references.
+		 */
+		if (!PageActive(page) && !page_mapped(page) &&
+		    !PageDirty(page) && !PageWriteback(page) &&
+		    !PageReferenced(page) && is_page_cache_freeable(page))
+			add_page_to_lru_list_tail(page, lruvec, lru);
+		else
+			add_page_to_lru_list(page, lruvec, lru);
 
 		if (is_active_lru(lru)) {
 			int file = is_file_lru(lru);
