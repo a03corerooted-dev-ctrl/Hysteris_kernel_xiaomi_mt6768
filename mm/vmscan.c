@@ -2635,6 +2635,17 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 
 		cond_resched_tasks_rcu_qs();
 
+		/*
+		 * Direct reclaim should not keep scanning the remaining LRUs
+		 * or memcgs after its goal is met. Keep the compaction gap for
+		 * high-order allocations, where nr_to_reclaim alone may be
+		 * insufficient to make a suitable block available.
+		 */
+		if (global_reclaim(sc) && !current_is_kswapd() &&
+		    sc->nr_reclaimed + nr_reclaimed >=
+		    max(nr_to_reclaim, compact_gap(sc->order)))
+			break;
+
 		if (nr_reclaimed < nr_to_reclaim || scan_adjusted)
 			continue;
 
@@ -2755,6 +2766,11 @@ static inline bool should_continue_reclaim(struct pglist_data *pgdat,
 			return false;
 	}
 
+	/* The direct-reclaim goal has already been satisfied. */
+	if (global_reclaim(sc) && !current_is_kswapd() &&
+	    sc->nr_reclaimed >= max(sc->nr_to_reclaim, compact_gap(sc->order)))
+		return false;
+
 	/*
 	 * If we have not reclaimed enough pages for compaction and the
 	 * inactive lists are large enough, continue reclaiming
@@ -2861,6 +2877,14 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 			vmpressure(sc->gfp_mask, memcg, false,
 				   sc->nr_scanned - scanned,
 				   sc->nr_reclaimed - reclaimed);
+
+			/* Stop the global direct-reclaim walk once its goal is met. */
+			if (global_reclaim(sc) && !current_is_kswapd() &&
+			    sc->nr_reclaimed >=
+			    max(sc->nr_to_reclaim, compact_gap(sc->order))) {
+				mem_cgroup_iter_break(root, memcg);
+				break;
+			}
 
 			/*
 			 * Direct reclaim and kswapd have to scan all memory
