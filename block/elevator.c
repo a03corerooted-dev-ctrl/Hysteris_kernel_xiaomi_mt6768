@@ -966,9 +966,9 @@ out:
 }
 
 /*
- * For blk-mq devices, we default to using mq-deadline, if available, for single
- * queue devices.  If deadline isn't available OR we have multiple queues,
- * default to "none".
+ * Prefer ADIOS for single-queue blk-mq devices. Keep mq-deadline as the
+ * fallback when ADIOS is unavailable or fails to initialize. Multi-queue
+ * devices continue to use "none" by default.
  */
 int elevator_init_mq(struct request_queue *q)
 {
@@ -983,7 +983,9 @@ int elevator_init_mq(struct request_queue *q)
 	if (unlikely(q->elevator))
 		goto out;
 
-	e = elevator_get(q, "mq-deadline", false);
+	e = elevator_get(q, "adios", false);
+	if (!e)
+		e = elevator_get(q, "mq-deadline", false);
 	if (!e)
 		goto out;
 
