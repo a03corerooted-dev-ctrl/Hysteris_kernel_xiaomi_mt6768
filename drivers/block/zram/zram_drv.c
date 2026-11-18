@@ -925,6 +925,7 @@ static ssize_t read_block_state(struct file *file, char __user *buf,
 			goto next;
 
 		ts = ktime_to_timespec64(zram->table[index].ac_time);
+#ifdef CONFIG_ZRAM_MULTI_COMP
 		copied = snprintf(kbuf + written, count,
 			"%12zd %12lld.%06lu %c%c%c%c%c%c\n",
 			index, (s64)ts.tv_sec,
@@ -933,11 +934,17 @@ static ssize_t read_block_state(struct file *file, char __user *buf,
 			zram_test_flag(zram, index, ZRAM_WB) ? 'w' : '.',
 			zram_test_flag(zram, index, ZRAM_HUGE) ? 'h' : '.',
 			zram_test_flag(zram, index, ZRAM_IDLE) ? 'i' : '.',
-#ifdef CONFIG_ZRAM_MULTI_COMP
 			zram_get_priority(zram, index) ? 'r' : '.',
 			zram_test_flag(zram, index, ZRAM_INCOMPRESSIBLE) ? 'n' : '.');
 #else
-			'.', '.');
+		copied = snprintf(kbuf + written, count,
+			"%12zd %12lld.%06lu %c%c%c%c\n",
+			index, (s64)ts.tv_sec,
+			ts.tv_nsec / NSEC_PER_USEC,
+			zram_test_flag(zram, index, ZRAM_SAME) ? 's' : '.',
+			zram_test_flag(zram, index, ZRAM_WB) ? 'w' : '.',
+			zram_test_flag(zram, index, ZRAM_HUGE) ? 'h' : '.',
+			zram_test_flag(zram, index, ZRAM_IDLE) ? 'i' : '.');
 #endif
 
 		if (count <= copied) {
@@ -1642,7 +1649,8 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 	unsigned long handle_old, handle_new;
 	unsigned int comp_len_old, comp_len_new = 0;
 	unsigned int class_index_old, class_index_new = UINT_MAX;
-	u32 num_recomps = 0;
+	u32 num_recomps = 0, num_remaining = 0, old_priority;
+	u32 i;
 	void *src, *dst;
 	int ret;
 
@@ -1657,10 +1665,14 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 	if (ret)
 		return ret;
 	class_index_old = zs_lookup_class_index(zram->mem_pool, comp_len_old);
+	old_priority = zram_get_priority(zram, index);
+	for (i = prio; i < prio_max; i++) {
+		if (zram->comps[i] && i > old_priority)
+			num_remaining++;
+	}
 
 	for (; prio < prio_max; prio++) {
-		if (!zram->comps[prio] ||
-		    prio <= zram_get_priority(zram, index))
+		if (!zram->comps[prio] || prio <= old_priority)
 			continue;
 		num_recomps++;
 		zstrm = zcomp_stream_get(zram->comps[prio]);
@@ -1686,7 +1698,9 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 		return 0;
 
 	if (class_index_new >= class_index_old) {
-		if (num_recomps == zram->num_active_comps - 1)
+		if (prio == ZRAM_SECONDARY_COMP &&
+		    prio_max == ZRAM_MAX_COMPS &&
+		    num_recomps == num_remaining)
 			zram_set_flag(zram, index, ZRAM_INCOMPRESSIBLE);
 		return 0;
 	}
@@ -1725,7 +1739,7 @@ static ssize_t recompress_store(struct device *dev,
 	char *args, *cursor, *token, *sep, *algo = NULL;
 	u32 mode = 0, threshold = 0;
 	u32 prio = ZRAM_SECONDARY_COMP, prio_max = ZRAM_MAX_COMPS;
-	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
+	unsigned long nr_pages;
 	unsigned long index;
 	struct page *page;
 	ssize_t ret;
@@ -1777,6 +1791,7 @@ static ssize_t recompress_store(struct device *dev,
 		ret = -EINVAL;
 		goto release_init_lock;
 	}
+	nr_pages = zram->disksize >> PAGE_SHIFT;
 
 	if (algo) {
 		bool found = false;
@@ -2102,7 +2117,6 @@ static void zram_reset_device(struct zram *zram)
 	zram_meta_free(zram, disksize);
 	memset(&zram->stats, 0, sizeof(zram->stats));
 	zram_destroy_comps(zram);
-	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 	reset_bdev(zram);
 }
 
