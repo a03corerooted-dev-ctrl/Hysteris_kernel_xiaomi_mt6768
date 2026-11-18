@@ -951,19 +951,16 @@ unlock:
 	return 0;
 }
 
-static void __free_zspage(struct zs_pool *pool, struct size_class *class,
-				struct zspage *zspage)
+/*
+ * Release the pages of an empty zspage after it has been detached from its
+ * size-class list. The caller must have locked every page in the zspage.
+ *
+ * Page freeing can take zone locks, so callers which already detached the
+ * zspage should not hold class->lock across this operation.
+ */
+static void free_zspage_pages(struct zs_pool *pool, struct zspage *zspage)
 {
 	struct page *page, *next;
-	enum fullness_group fg;
-	unsigned int class_idx;
-
-	get_zspage_mapping(zspage, &class_idx, &fg);
-
-	assert_spin_locked(&class->lock);
-
-	VM_BUG_ON(get_zspage_inuse(zspage));
-	VM_BUG_ON(fg != ZS_EMPTY);
 
 	next = page = get_first_page(zspage);
 	do {
@@ -977,6 +974,22 @@ static void __free_zspage(struct zs_pool *pool, struct size_class *class,
 	} while (page != NULL);
 
 	cache_free_zspage(pool, zspage);
+}
+
+static void __free_zspage(struct zs_pool *pool, struct size_class *class,
+				struct zspage *zspage)
+{
+	enum fullness_group fg;
+	unsigned int class_idx;
+
+	get_zspage_mapping(zspage, &class_idx, &fg);
+
+	assert_spin_locked(&class->lock);
+
+	VM_BUG_ON(get_zspage_inuse(zspage));
+	VM_BUG_ON(fg != ZS_EMPTY);
+
+	free_zspage_pages(pool, zspage);
 
 	zs_stat_dec(class, OBJ_ALLOCATED, class->objs_per_zspage);
 	atomic_long_sub(class->pages_per_zspage,
@@ -1568,6 +1581,7 @@ void zs_free(struct zs_pool *pool, unsigned long handle)
 	struct size_class *class;
 	enum fullness_group fullness;
 	bool isolated;
+	bool free_pages_outside_lock = false;
 
 	if (unlikely(!handle))
 		return;
@@ -1593,11 +1607,34 @@ void zs_free(struct zs_pool *pool, unsigned long handle)
 	isolated = is_zspage_isolated(zspage);
 	migrate_read_unlock(zspage);
 	/* If zspage is isolated, zs_page_putback will free the zspage */
-	if (likely(!isolated))
-		free_zspage(pool, class, zspage);
+	if (likely(!isolated)) {
+		VM_BUG_ON(get_zspage_inuse(zspage));
+		VM_BUG_ON(list_empty(&zspage->list));
+
+		/*
+		 * Lock all component pages and detach the empty zspage while
+		 * class->lock is held. The page release itself may acquire
+		 * zone locks, so defer that part until after dropping the lock.
+		 */
+		if (trylock_zspage(zspage)) {
+			remove_zspage(class, zspage, ZS_EMPTY);
+			zs_stat_dec(class, OBJ_ALLOCATED,
+				    class->objs_per_zspage);
+			free_pages_outside_lock = true;
+		} else {
+			kick_deferred_free(pool);
+		}
+	}
 out:
 
 	spin_unlock(&class->lock);
+
+	if (free_pages_outside_lock) {
+		free_zspage_pages(pool, zspage);
+		atomic_long_sub(class->pages_per_zspage,
+				&pool->pages_allocated);
+	}
+
 	unpin_tag(handle);
 	cache_free_handle(pool, handle);
 }
