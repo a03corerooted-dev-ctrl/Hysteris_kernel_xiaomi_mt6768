@@ -39,3 +39,12 @@ config ZRAM_MEMORY_TRACKING
 	  /sys/kernel/debug/zram/zramX/block_state.
 
 	  See Documentation/blockdev/zram.txt for more information.
+
+config ZRAM_MULTI_COMP
+	bool "Enable multiple compression streams"
+	depends on ZRAM
+	help
+	  Enable secondary compression algorithms and manual page recompression.
+	  This can improve memory savings for incompressible or idle pages at the
+	  cost of additional CPU time. Idle-page recompression requires
+	  ZRAM_MEMORY_TRACKING.
