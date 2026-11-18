@@ -1027,14 +1027,16 @@ static void comp_algorithm_set(struct zram *zram, u32 prio,
 	zram->comp_algs[prio] = alg;
 }
 
-static ssize_t __comp_algorithm_show(struct zram *zram, u32 prio, char *buf)
+static ssize_t comp_algorithm_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
 {
+	struct zram *zram = dev_to_zram(dev);
 	ssize_t ret;
 
-	if (!zram->comp_algs[prio])
-		return -EINVAL;
 	down_read(&zram->init_lock);
-	ret = zcomp_available_show(zram->comp_algs[prio], buf);
+	ret = zram->comp_algs[ZRAM_PRIMARY_COMP] ?
+		zcomp_available_show(zram->comp_algs[ZRAM_PRIMARY_COMP], buf) :
+		-EINVAL;
 	up_read(&zram->init_lock);
 	return ret;
 }
@@ -1068,13 +1070,6 @@ static int __comp_algorithm_store(struct zram *zram, u32 prio,
 	return 0;
 }
 
-static ssize_t comp_algorithm_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct zram *zram = dev_to_zram(dev);
-	return __comp_algorithm_show(zram, ZRAM_PRIMARY_COMP, buf);
-}
-
 static ssize_t comp_algorithm_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
@@ -1086,6 +1081,11 @@ static ssize_t comp_algorithm_store(struct device *dev,
 	if (!compressor)
 		return -ENOMEM;
 	strim(compressor);
+	{
+		char *trimmed = strim(compressor);
+
+		memmove(compressor, trimmed, strlen(trimmed) + 1);
+	}
 	ret = __comp_algorithm_store(zram, ZRAM_PRIMARY_COMP, compressor);
 	kfree(compressor);
 	return ret ? ret : len;
@@ -1099,13 +1099,16 @@ static ssize_t recomp_algorithm_show(struct device *dev,
 	ssize_t size = 0;
 	u32 prio;
 
+	down_read(&zram->init_lock);
 	for (prio = ZRAM_SECONDARY_COMP; prio < ZRAM_MAX_COMPS; prio++) {
 		if (!zram->comp_algs[prio])
 			continue;
 		size += scnprintf(buf + size, PAGE_SIZE - size - 2,
 				  "#%u: ", prio);
-		size += __comp_algorithm_show(zram, prio, buf + size);
+		size += zcomp_available_show(zram->comp_algs[prio],
+					     buf + size);
 	}
+	up_read(&zram->init_lock);
 	return size;
 }
 
