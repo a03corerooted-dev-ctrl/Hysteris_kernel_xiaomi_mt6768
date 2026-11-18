@@ -984,8 +984,15 @@ int elevator_init_mq(struct request_queue *q)
 		goto out;
 
 	e = elevator_get(q, "adios", false);
-	if (!e)
-		e = elevator_get(q, "mq-deadline", false);
+	if (e) {
+		err = blk_mq_init_sched(q, e);
+		if (!err)
+			goto out;
+		elevator_put(e);
+	}
+
+	/* Keep the device usable if ADIOS is unavailable or fails to init. */
+	e = elevator_get(q, "mq-deadline", false);
 	if (!e)
 		goto out;
 
