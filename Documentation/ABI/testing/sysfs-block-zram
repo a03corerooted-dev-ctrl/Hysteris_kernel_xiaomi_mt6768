@@ -137,3 +137,25 @@ Description:
 		The writeback_limit file is read-write and specifies the maximum
 		amount of writeback ZRAM can do. The limit could be changed
 		in run time.
+
+What:		/sys/block/zram<id>/recomp_algorithm
+Date:		November 2026
+Contact:	Sergey Senozhatsky <sergey.senozhatsky@gmail.com>
+Description:
+		The recomp_algorithm file is read-write and configures secondary
+		compression algorithms when CONFIG_ZRAM_MULTI_COMP is enabled.
+		Each write must provide an algorithm name and a priority:
+		"algo=<name> priority=<1..3>". Algorithms must be selected before
+		the zram device is initialized by writing disksize.
+
+What:		/sys/block/zram<id>/recompress
+Date:		November 2026
+Contact:	Sergey Senozhatsky <sergey.senozhatsky@gmail.com>
+Description:
+		The recompress file is write-only and requests a synchronous
+		recompression pass when CONFIG_ZRAM_MULTI_COMP is enabled.
+		The "type" parameter must be one of "idle", "huge", or
+		"huge_idle". An optional "threshold=<bytes>" parameter skips
+		objects smaller than the requested compressed size. An optional
+		"algo=<name>" parameter limits the pass to the selected secondary
+		algorithm. Recompression is not scheduled automatically.
