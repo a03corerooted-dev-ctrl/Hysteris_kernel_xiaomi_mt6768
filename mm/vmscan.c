@@ -51,6 +51,7 @@
 #include <linux/dax.h>
 #include <linux/psi.h>
 #include <linux/sysfs.h>
+#include <linux/atomic.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -2374,7 +2375,8 @@ static bool memory_boost_active(struct pglist_data *pgdat)
 	 */
 	min_file_pages = max(pgdat->node_present_pages / 20, high_wmark);
 	if (file_pages <= min_file_pages) {
-		WRITE_ONCE(memory_boost_expires, 0);
+		/* Do not cancel a newer userspace request racing this check. */
+		cmpxchg(&memory_boost_expires, expires, 0);
 		return false;
 	}
 
