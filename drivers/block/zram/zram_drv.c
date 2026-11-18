@@ -1655,6 +1655,7 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 {
 	struct zcomp_strm *zstrm = NULL;
 	unsigned long handle_old, handle_new;
+	unsigned long alloced_pages;
 	unsigned int comp_len_old, comp_len_new = 0;
 	unsigned int class_index_old, class_index_new = UINT_MAX;
 	u32 num_recomps = 0, num_remaining = 0, old_priority;
@@ -1723,6 +1724,15 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 		zcomp_stream_put(zram->comps[prio]);
 		return -ENOMEM;
 	}
+
+	alloced_pages = zs_get_total_pages(zram->mem_pool);
+	update_used_max(zram, alloced_pages);
+	if (zram->limit_pages && alloced_pages > zram->limit_pages) {
+		zs_free(zram->mem_pool, handle_new);
+		zcomp_stream_put(zram->comps[prio]);
+		return -ENOMEM;
+	}
+
 	dst = zs_map_object(zram->mem_pool, handle_new, ZS_MM_WO);
 	memcpy(dst, zstrm->buffer, comp_len_new);
 	zcomp_stream_put(zram->comps[prio]);
