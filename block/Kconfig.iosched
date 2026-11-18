@@ -73,7 +73,7 @@ config MQ_IOSCHED_DEADLINE
 
 config IOSCHED_ADIOS
 	tristate "ADIOS I/O scheduler"
-	default n
+	default y
 	help
 	  Adaptive Deadline I/O Scheduler (ADIOS) for blk-mq. It learns
 	  device I/O latency and uses adaptive deadlines and request batching.
