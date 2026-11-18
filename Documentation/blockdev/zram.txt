@@ -327,6 +327,66 @@ budget in next setting is user's job.
 If admin want to measure writeback count in a certain period, he could
 know it via /sys/block/zram0/bd_stat's 3rd column.
 
+= multiple compression algorithms
+
+With CONFIG_ZRAM_MULTI_COMP, zram can use one primary compressor and up to
+three secondary compressors. Pages are initially compressed with the primary
+algorithm. Secondary algorithms are used only when userspace explicitly
+requests recompression through the recompress sysfs attribute.
+
+The primary compressor defaults to lzo-rle. Configure secondary algorithms
+before setting disksize, because compressor selection is locked once the
+device is initialized:
+
+	# Configure zstd as the first secondary compressor
+	echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm
+
+	# Optionally configure additional secondary compressors
+	echo "algo=lz4 priority=2" > /sys/block/zram0/recomp_algorithm
+
+	# Inspect configured secondary compressors
+	cat /sys/block/zram0/recomp_algorithm
+
+The selected compression algorithm must be enabled in the kernel Crypto API.
+For example, zstd requires CONFIG_CRYPTO_ZSTD. The existing lz4 backend
+requires CONFIG_CRYPTO_LZ4.
+
+After configuring algorithms, initialize zram normally by setting disksize
+and activating the device.
+
+Recompression is manual. It does not start automatically and no background
+worker is created by this feature. Userspace can request recompression of
+huge pages:
+
+	echo "type=huge" > /sys/block/zram0/recompress
+
+Idle pages can be marked and then recompressed:
+
+	echo all > /sys/block/zram0/idle
+	echo "type=idle" > /sys/block/zram0/recompress
+
+The huge_idle mode selects slots that are both huge and idle:
+
+	echo all > /sys/block/zram0/idle
+	echo "type=huge_idle" > /sys/block/zram0/recompress
+
+A threshold, in bytes, can be supplied to skip pages whose currently
+compressed object is smaller than the specified value:
+
+	echo "type=idle threshold=1024" > /sys/block/zram0/recompress
+
+A specific secondary algorithm can be selected for a recompression pass:
+
+	echo "type=idle algo=zstd" > /sys/block/zram0/recompress
+
+Recompression replaces an existing object only when the result saves at
+least one zsmalloc size class. If allocation of the replacement object fails,
+the original compressed page is retained.
+
+The idle attribute marks slots as idle until they are accessed again. This
+manual idle marking is available independently of CONFIG_ZRAM_MEMORY_TRACKING.
+That option additionally exposes access timestamps and block-state diagnostics.
+
 = memory tracking
 
 With CONFIG_ZRAM_MEMORY_TRACKING, user can know information of the
