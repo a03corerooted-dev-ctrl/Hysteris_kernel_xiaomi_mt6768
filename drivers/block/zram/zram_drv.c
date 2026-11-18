@@ -33,6 +33,7 @@
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
+#include <linux/sched.h>
 
 #include "zram_drv.h"
 
