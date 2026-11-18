@@ -260,9 +260,14 @@ To use the feature, admin should set up backing device via
 	"echo /dev/sda5 > /sys/block/zramX/backing_dev"
 
 before disksize setting. It supports only partition at this moment.
-If admin want to use incompressible page writeback, they could do via
+If admin want to use incompressible page writeback with
+CONFIG_ZRAM_MULTI_COMP, they can use:
 
-	"echo huge > /sys/block/zramX/write"
+	"echo incompressible > /sys/block/zramX/writeback"
+
+To write back huge pages, use:
+
+	"echo huge > /sys/block/zramX/writeback"
 
 To use idle page writeback, first, user need to declare zram pages
 as idle.
@@ -334,9 +339,17 @@ three secondary compressors. Pages are initially compressed with the primary
 algorithm. Secondary algorithms are used only when userspace explicitly
 requests recompression through the recompress sysfs attribute.
 
-The primary compressor defaults to lzo-rle. Configure secondary algorithms
-before setting disksize, because compressor selection is locked once the
-device is initialized:
+The normal MT6768 defconfig leaves this feature disabled. An experimental
+build can merge the optional fragment with the normal defconfig:
+
+	scripts/kconfig/merge_config.sh \
+		arch/arm64/configs/vendor/mt6768_defconfig \
+		arch/arm64/configs/vendor/mt6768_multicomp.config
+
+The fragment enables CONFIG_ZRAM_MULTI_COMP and CONFIG_CRYPTO_ZSTD without
+changing the normal device defconfig. The primary compressor defaults to
+lzo-rle. Configure secondary algorithms before setting disksize, because
+compressor selection is locked once the device is initialized:
 
 	# Configure zstd as the first secondary compressor
 	echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm
