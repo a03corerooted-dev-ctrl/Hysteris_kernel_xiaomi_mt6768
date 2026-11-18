@@ -160,10 +160,13 @@ static inline bool is_partial_io(struct bio_vec *bvec)
 /* The slot must be locked while accessing compression priority metadata. */
 static inline void zram_set_priority(struct zram *zram, u32 index, u32 prio)
 {
+	unsigned long mask = (unsigned long)ZRAM_COMP_PRIORITY_MASK <<
+			     ZRAM_COMP_PRIORITY_BIT1;
+
 	prio &= ZRAM_COMP_PRIORITY_MASK;
-	zram->table[index].flags &= ~(ZRAM_COMP_PRIORITY_MASK <<
-					 ZRAM_COMP_PRIORITY_BIT1);
-	zram->table[index].flags |= prio << ZRAM_COMP_PRIORITY_BIT1;
+	zram->table[index].flags &= ~mask;
+	zram->table[index].flags |= (unsigned long)prio <<
+				    ZRAM_COMP_PRIORITY_BIT1;
 }
 
 static inline u32 zram_get_priority(struct zram *zram, u32 index)
