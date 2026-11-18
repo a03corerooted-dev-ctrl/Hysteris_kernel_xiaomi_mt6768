@@ -383,8 +383,9 @@ The huge_idle mode selects slots that are both huge and idle:
 	echo all > /sys/block/zram0/idle
 	echo "type=huge_idle" > /sys/block/zram0/recompress
 
-A threshold, in bytes, can be supplied to skip pages whose currently
-compressed object is smaller than the specified value:
+A threshold, in bytes, can be supplied to select pages whose current
+compressed object is at least the specified size. A recompressed result is
+accepted only when it falls below that threshold:
 
 	echo "type=idle threshold=1024" > /sys/block/zram0/recompress
 
