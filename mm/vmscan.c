@@ -50,6 +50,7 @@
 #include <linux/printk.h>
 #include <linux/dax.h>
 #include <linux/psi.h>
+#include <linux/sysfs.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -2339,6 +2340,91 @@ enum scan_balance {
 };
 
 /*
+ * A short, userspace-triggered reclaim hint for application launches.
+ * Only kswapd honors it; direct reclaim and memcg policy remain unchanged.
+ */
+#define MEMORY_BOOST_MAX_TIME (5 * HZ)
+
+static unsigned long memory_boost_expires;
+
+static bool memory_boost_active(struct pglist_data *pgdat)
+{
+	unsigned long expires = READ_ONCE(memory_boost_expires);
+	unsigned long file_pages;
+	unsigned long min_file_pages;
+	unsigned long high_wmark = 0;
+	int z;
+
+	if (!expires || time_after_eq(jiffies, expires))
+		return false;
+
+	file_pages = node_page_state(pgdat, NR_ACTIVE_FILE) +
+		     node_page_state(pgdat, NR_INACTIVE_FILE);
+
+	for (z = 0; z < MAX_NR_ZONES; z++) {
+		struct zone *zone = &pgdat->node_zones[z];
+
+		if (managed_zone(zone))
+			high_wmark += high_wmark_pages(zone);
+	}
+
+	/*
+	 * Keep a dynamic file-cache reserve: at least 5% of this node's
+	 * present pages or its aggregate high watermark, whichever is larger.
+	 */
+	min_file_pages = max(pgdat->node_present_pages / 20, high_wmark);
+	if (file_pages <= min_file_pages) {
+		WRITE_ONCE(memory_boost_expires, 0);
+		return false;
+	}
+
+	return true;
+}
+
+#ifdef CONFIG_SYSFS
+static ssize_t memory_boost_show(struct kobject *kobj,
+				 struct kobj_attribute *attr, char *buf)
+{
+	unsigned long expires = READ_ONCE(memory_boost_expires);
+	bool active = expires && time_before(jiffies, expires);
+
+	return sprintf(buf, "%d\n", active ? 1 : 0);
+}
+
+static ssize_t memory_boost_store(struct kobject *kobj,
+				  struct kobj_attribute *attr,
+				  const char *buf, size_t count)
+{
+	bool enable;
+	int err;
+
+	err = kstrtobool(buf, &enable);
+	if (err)
+		return err;
+
+	if (enable)
+		WRITE_ONCE(memory_boost_expires, jiffies + MEMORY_BOOST_MAX_TIME);
+	else
+		WRITE_ONCE(memory_boost_expires, 0);
+
+	return count;
+}
+
+static struct kobj_attribute memory_boost_attr =
+	__ATTR(memory_boost, 0644, memory_boost_show, memory_boost_store);
+
+static struct attribute *vmscan_attrs[] = {
+	&memory_boost_attr.attr,
+	NULL,
+};
+
+static struct attribute_group vmscan_attr_group = {
+	.name = "vmscan",
+	.attrs = vmscan_attrs,
+};
+#endif /* CONFIG_SYSFS */
+
+/*
  * Determine how aggressively the anon and file LRU lists should be
  * scanned.  The relative value of each set of LRU lists is determined
  * by looking at the fraction of the pages scanned we did rotate back
@@ -2474,6 +2560,18 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 				goto out;
 			}
 		}
+	}
+
+	/*
+	 * A userspace launch hint may temporarily preserve anonymous working
+	 * sets by steering background reclaim toward file pages. The dynamic
+	 * reserve in memory_boost_active() prevents draining the file cache.
+	 * Keep this below the cache-trap and emergency-priority safeguards.
+	 */
+	if (current_is_kswapd() && global_reclaim(sc) &&
+	    memory_boost_active(pgdat)) {
+		scan_balance = SCAN_FILE;
+		goto out;
 	}
 
 	/*
@@ -4127,6 +4225,10 @@ static int __init kswapd_init(void)
 					"mm/vmscan:online", kswapd_cpu_online,
 					NULL);
 	WARN_ON(ret < 0);
+#ifdef CONFIG_SYSFS
+	if (sysfs_create_group(mm_kobj, &vmscan_attr_group))
+		pr_err("vmscan: failed to register memory_boost sysfs interface\n");
+#endif
 	return 0;
 }
 
