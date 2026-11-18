@@ -1436,9 +1436,10 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 		zram_slot_unlock(zram, index);
 	} else {
 		zram_slot_unlock(zram, index);
-		/* rw_page has no bio to chain; let the caller retry with bio. */
-		if (!bio)
-			return -EOPNOTSUPP;
+		/*
+		 * With no parent bio, read_from_bdev() submits an asynchronous
+		 * read and completes the page through zram_page_end_io().
+		 */
 		ret = zram_bvec_read_from_bdev(zram, page, index, bio,
 					       partial_io);
 	}
@@ -1653,7 +1654,7 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 	unsigned int comp_len_old, comp_len_new = 0;
 	unsigned int class_index_old, class_index_new = UINT_MAX;
 	u32 num_recomps = 0, num_remaining = 0, old_priority;
-	u32 i;
+	u32 i, start_prio = prio;
 	void *src, *dst;
 	int ret;
 
@@ -1701,7 +1702,7 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 		return 0;
 
 	if (class_index_new >= class_index_old) {
-		if (prio == ZRAM_SECONDARY_COMP &&
+		if (start_prio == ZRAM_SECONDARY_COMP &&
 		    prio_max == ZRAM_MAX_COMPS &&
 		    num_recomps == num_remaining)
 			zram_set_flag(zram, index, ZRAM_INCOMPRESSIBLE);
