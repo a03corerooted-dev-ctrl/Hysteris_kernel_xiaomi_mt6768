@@ -4266,8 +4266,15 @@ skip_pmd_checks:
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
-	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
+	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma)) {
+		/* NUMA migration may block and is not part of the SPF path. */
+		if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+			pte_unmap(vmf->pte);
+			vmf->pte = NULL;
+			return VM_FAULT_RETRY;
+		}
 		return do_numa_page(vmf);
+	}
 
 	if (!pte_spinlock(vmf)) {
 		pte_unmap(vmf->pte);
