@@ -180,6 +180,8 @@ struct psi_group psi_system = {
 
 static void psi_avgs_work(struct work_struct *work);
 
+static void poll_timer_fn(struct timer_list *t);
+
 static void group_init(struct psi_group *group)
 {
 	int cpu;
@@ -191,7 +193,6 @@ static void group_init(struct psi_group *group)
 	INIT_DELAYED_WORK(&group->avgs_work, psi_avgs_work);
 	mutex_init(&group->avgs_lock);
 	/* Init trigger-related members */
-	atomic_set(&group->poll_scheduled, 0);
 	mutex_init(&group->trigger_lock);
 	INIT_LIST_HEAD(&group->triggers);
 	memset(group->nr_triggers, 0, sizeof(group->nr_triggers));
@@ -200,7 +201,10 @@ static void group_init(struct psi_group *group)
 	memset(group->polling_total, 0, sizeof(group->polling_total));
 	group->polling_next_update = ULLONG_MAX;
 	group->polling_until = 0;
-	rcu_assign_pointer(group->poll_kworker, NULL);
+	init_waitqueue_head(&group->poll_wait);
+	atomic_set(&group->poll_wakeup, 0);
+	timer_setup(&group->poll_timer, poll_timer_fn, 0);
+	rcu_assign_pointer(group->poll_task, NULL);
 }
 
 void __init psi_init(void)
@@ -552,62 +556,35 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 }
 
 /*
- * Schedule polling if it's not already scheduled. It's safe to call even from
- * hotpath because even though kthread_queue_delayed_work takes worker->lock
- * spinlock that spinlock is never contended due to poll_scheduled atomic
- * preventing such competition.
+ * Schedule PSI polling without taking locks from the scheduler hotpath.
+ * The timer callback only wakes the dedicated polling thread.
  */
 static void psi_schedule_poll_work(struct psi_group *group, unsigned long delay)
 {
-	struct kthread_worker *kworker;
+	struct task_struct *task;
 
-	/* Do not reschedule if already scheduled */
-	if (atomic_cmpxchg(&group->poll_scheduled, 0, 1) != 0)
+	if (timer_pending(&group->poll_timer))
 		return;
 
 	rcu_read_lock();
-
-	kworker = rcu_dereference(group->poll_kworker);
-	/*
-	 * kworker might be NULL in case psi_trigger_destroy races with
-	 * psi_task_change (hotpath) which can't use locks
-	 */
-	if (likely(kworker))
-		kthread_queue_delayed_work(kworker, &group->poll_work, delay);
-	else
-		atomic_set(&group->poll_scheduled, 0);
-
+	task = rcu_dereference(group->poll_task);
+	if (likely(task))
+		mod_timer(&group->poll_timer, jiffies + delay);
 	rcu_read_unlock();
 }
 
-static void psi_poll_work(struct kthread_work *work)
+static void psi_poll_work(struct psi_group *group)
 {
-	struct kthread_delayed_work *dwork;
-	struct psi_group *group;
 	u32 changed_states;
 	u64 now;
 
-	dwork = container_of(work, struct kthread_delayed_work, work);
-	group = container_of(dwork, struct psi_group, poll_work);
-
-	atomic_set(&group->poll_scheduled, 0);
-
 	mutex_lock(&group->trigger_lock);
-
 	now = sched_clock();
-
 	collect_percpu_times(group, PSI_POLL, &changed_states);
 
 	if (changed_states & group->poll_states) {
-		/* Initialize trigger windows when entering polling mode */
 		if (now > group->polling_until)
 			init_triggers(group, now);
-
-		/*
-		 * Keep the monitor active for at least the duration of the
-		 * minimum tracking window as long as monitor states are
-		 * changing.
-		 */
 		group->polling_until = now +
 			group->poll_min_period * UPDATES_PER_WINDOW;
 	}
@@ -616,15 +593,36 @@ static void psi_poll_work(struct kthread_work *work)
 		group->polling_next_update = ULLONG_MAX;
 		goto out;
 	}
-
 	if (now >= group->polling_next_update)
 		group->polling_next_update = update_triggers(group, now);
 
 	psi_schedule_poll_work(group,
 		nsecs_to_jiffies(group->polling_next_update - now) + 1);
-
 out:
 	mutex_unlock(&group->trigger_lock);
+}
+
+static int psi_poll_worker(void *data)
+{
+	struct psi_group *group = data;
+
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(group->poll_wait,
+			atomic_cmpxchg(&group->poll_wakeup, 1, 0) ||
+			kthread_should_stop());
+		if (kthread_should_stop())
+			break;
+		psi_poll_work(group);
+	}
+	return 0;
+}
+
+static void poll_timer_fn(struct timer_list *t)
+{
+	struct psi_group *group = from_timer(group, t, poll_timer);
+
+	atomic_set(&group->poll_wakeup, 1);
+	wake_up_interruptible(&group->poll_wait);
 }
 
 static void record_times(struct psi_group_cpu *groupc, int cpu,
@@ -886,6 +884,8 @@ void psi_cgroup_free(struct cgroup *cgroup)
 		return;
 
 	cancel_delayed_work_sync(&cgroup->psi.avgs_work);
+	/* Quiesce the timer before freeing the cgroup's PSI state. */
+	del_timer_sync(&cgroup->psi.poll_timer);
 	free_percpu(cgroup->psi.pcpu);
 	/* All triggers must be removed by now */
 	WARN_ONCE(cgroup->psi.poll_states, "psi: trigger leak\n");
@@ -1053,22 +1053,22 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 
 	mutex_lock(&group->trigger_lock);
 
-	if (!rcu_access_pointer(group->poll_kworker)) {
+	if (!rcu_access_pointer(group->poll_task)) {
 		struct sched_param param = {
 			.sched_priority = 1,
 		};
-		struct kthread_worker *kworker;
+		struct task_struct *task;
 
-		kworker = kthread_create_worker(0, "psimon");
-		if (IS_ERR(kworker)) {
+		task = kthread_create(psi_poll_worker, group, "psimon");
+		if (IS_ERR(task)) {
 			kfree(t);
 			mutex_unlock(&group->trigger_lock);
-			return ERR_CAST(kworker);
+			return ERR_CAST(task);
 		}
-		sched_setscheduler_nocheck(kworker->task, SCHED_FIFO, &param);
-		kthread_init_delayed_work(&group->poll_work,
-				psi_poll_work);
-		rcu_assign_pointer(group->poll_kworker, kworker);
+		atomic_set(&group->poll_wakeup, 0);
+		rcu_assign_pointer(group->poll_task, task);
+		sched_setscheduler_nocheck(task, SCHED_FIFO, &param);
+		wake_up_process(task);
 	}
 
 	list_add(&t->node, &group->triggers);
@@ -1085,23 +1085,13 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 void psi_trigger_destroy(struct psi_trigger *t)
 {
 	struct psi_group *group;
-	struct kthread_worker *kworker_to_destroy = NULL;
+	struct task_struct *task_to_destroy = NULL;
 
-	/*
-	 * We do not check psi_disabled since it might have been disabled after
-	 * the trigger got created.
-	 */
 	if (!t)
 		return;
 
 	group = t->group;
-	/*
-	 * Wakeup waiters to stop polling and clear the queue to prevent it from
-	 * being accessed later. Can happen if cgroup is deleted from under a
-	 * polling process.
-	 */
 	wake_up_pollfree(&t->event_wait);
-
 	mutex_lock(&group->trigger_lock);
 
 	if (!list_empty(&t->node)) {
@@ -1112,45 +1102,25 @@ void psi_trigger_destroy(struct psi_trigger *t)
 		group->nr_triggers[t->state]--;
 		if (!group->nr_triggers[t->state])
 			group->poll_states &= ~(1 << t->state);
-		/* reset min update period for the remaining triggers */
 		list_for_each_entry(tmp, &group->triggers, node)
 			period = min(period, div_u64(tmp->win.size,
 					UPDATES_PER_WINDOW));
 		group->poll_min_period = period;
-		/* Destroy poll_kworker when the last trigger is destroyed */
 		if (group->poll_states == 0) {
 			group->polling_until = 0;
-			kworker_to_destroy = rcu_dereference_protected(
-					group->poll_kworker,
+			task_to_destroy = rcu_dereference_protected(
+					group->poll_task,
 					lockdep_is_held(&group->trigger_lock));
-			rcu_assign_pointer(group->poll_kworker, NULL);
+			rcu_assign_pointer(group->poll_task, NULL);
+			del_timer(&group->poll_timer);
 		}
 	}
-
 	mutex_unlock(&group->trigger_lock);
 
-	/*
-	 * Wait for psi_schedule_poll_work RCU to complete its read-side
-	 * critical section before destroying the trigger and optionally the
-	 * poll_task.
-	 */
+	/* Drain scheduler-hotpath RCU readers before stopping psimon. */
 	synchronize_rcu();
-	/*
-	 * Destroy the kworker after releasing trigger_lock to prevent a
-	 * deadlock while waiting for psi_poll_work to acquire trigger_lock
-	 */
-	if (kworker_to_destroy) {
-		/*
-		 * After the RCU grace period has expired, the worker
-		 * can no longer be found through group->poll_kworker.
-		 * But it might have been already scheduled before
-		 * that - deschedule it cleanly before destroying it.
-		 */
-		kthread_cancel_delayed_work_sync(&group->poll_work);
-		atomic_set(&group->poll_scheduled, 0);
-
-		kthread_destroy_worker(kworker_to_destroy);
-	}
+	if (task_to_destroy)
+		kthread_stop(task_to_destroy);
 	kfree(t);
 }
 

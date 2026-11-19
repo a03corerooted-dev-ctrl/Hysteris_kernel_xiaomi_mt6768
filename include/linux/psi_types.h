@@ -2,6 +2,7 @@
 #define _LINUX_PSI_TYPES_H
 
 #include <linux/kthread.h>
+#include <linux/timer.h>
 #include <linux/seqlock.h>
 #include <linux/types.h>
 #include <linux/kref.h>
@@ -141,10 +142,11 @@ struct psi_group {
 	u64 total[NR_PSI_AGGREGATORS][NR_PSI_STATES - 1];
 	unsigned long avg[NR_PSI_STATES - 1][3];
 
-	/* Monitor work control */
-	atomic_t poll_scheduled;
-	struct kthread_worker __rcu *poll_kworker;
-	struct kthread_delayed_work poll_work;
+	/* Monitor polling thread and timer */
+	struct task_struct __rcu *poll_task;
+	struct timer_list poll_timer;
+	wait_queue_head_t poll_wait;
+	atomic_t poll_wakeup;
 
 	/* Protects data used by the monitor */
 	struct mutex trigger_lock;
