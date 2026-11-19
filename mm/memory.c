@@ -2155,6 +2155,131 @@ static inline int pte_unmap_same(struct mm_struct *mm, pmd_t *pmd,
 	return same;
 }
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+/*
+ * PTE locks taken by a speculative fault must never wait while IRQs are
+ * disabled: an unmap on another CPU may be waiting for a TLB shootdown
+ * interrupt from this CPU. Trylock and fall back to mmap_sem instead.
+ */
+static bool pte_spinlock(struct vm_fault *vmf)
+{
+	pmd_t pmdval;
+
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
+		vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
+		spin_lock(vmf->ptl);
+		return true;
+	}
+
+	local_irq_disable();
+	if (vma_has_changed(vmf))
+		goto out;
+	pmdval = READ_ONCE(*vmf->pmd);
+	if (!pmd_same(pmdval, vmf->orig_pmd))
+		goto out;
+
+	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, &pmdval);
+	if (!spin_trylock(vmf->ptl))
+		goto out;
+	if (vma_has_changed(vmf)) {
+		spin_unlock(vmf->ptl);
+		goto out;
+	}
+	local_irq_enable();
+	return true;
+out:
+	local_irq_enable();
+	return false;
+}
+
+static bool __pte_map_lock_speculative(struct vm_fault *vmf,
+				       unsigned long addr)
+{
+	pte_t *pte;
+	spinlock_t *ptl;
+	pmd_t pmdval;
+
+	local_irq_disable();
+	if (vma_has_changed(vmf))
+		goto out;
+	pmdval = READ_ONCE(*vmf->pmd);
+	if (!pmd_same(pmdval, vmf->orig_pmd))
+		goto out;
+
+	ptl = pte_lockptr(vmf->vma->vm_mm, &pmdval);
+	pte = pte_offset_map(&pmdval, addr);
+	if (unlikely(!spin_trylock(ptl))) {
+		pte_unmap(pte);
+		goto out;
+	}
+	if (vma_has_changed(vmf)) {
+		pte_unmap_unlock(pte, ptl);
+		goto out;
+	}
+	vmf->pte = pte;
+	vmf->ptl = ptl;
+	local_irq_enable();
+	return true;
+out:
+	local_irq_enable();
+	return false;
+}
+
+static bool pte_map_lock(struct vm_fault *vmf)
+{
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
+		vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+					       vmf->address, &vmf->ptl);
+		return true;
+	}
+	return __pte_map_lock_speculative(vmf, vmf->address);
+}
+
+static bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr)
+{
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
+		vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+					       addr, &vmf->ptl);
+		return true;
+	}
+	return __pte_map_lock_speculative(vmf, addr);
+}
+
+static bool vmf_allows_speculation(struct vm_fault *vmf)
+{
+	/* File, device, shared, THP and userfaultfd VMAs use the locked path. */
+	if (!vma_is_anonymous(vmf->vma) ||
+	    (vmf->vma_flags & (VM_SHARED | VM_PFNMAP | VM_MIXEDMAP | VM_IO |
+			       __VM_UFFD_FLAGS | VM_GROWSDOWN | VM_GROWSUP)))
+		return false;
+	/* anon_vma_prepare() is not safe without mmap_sem. */
+	return READ_ONCE(vmf->vma->anon_vma) != NULL;
+}
+#else
+static inline bool pte_spinlock(struct vm_fault *vmf)
+{
+	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
+	spin_lock(vmf->ptl);
+	return true;
+}
+static inline bool pte_map_lock(struct vm_fault *vmf)
+{
+	vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+				       vmf->address, &vmf->ptl);
+	return true;
+}
+static inline bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr)
+{
+	vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+				       addr, &vmf->ptl);
+	return true;
+}
+static inline bool vmf_allows_speculation(struct vm_fault *vmf)
+{
+	return false;
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
+
 static inline bool cow_user_page(struct page *dst, struct page *src,
 				 struct vm_fault *vmf)
 {
