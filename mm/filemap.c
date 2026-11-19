@@ -2810,6 +2810,7 @@ static bool __read_mostly allow_file_spec_access;
 
 static int __init allow_file_spec_access_setup(char *str)
 {
+	(void)str;
 	allow_file_spec_access = true;
 	return 1;
 }
