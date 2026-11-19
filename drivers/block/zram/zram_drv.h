@@ -16,6 +16,7 @@
 #define _ZRAM_DRV_H_
 
 #include <linux/rwsem.h>
+#include <linux/workqueue.h>
 #include <linux/zsmalloc.h>
 #include <linux/crypto.h>
 
@@ -65,6 +66,9 @@ enum zram_pageflags {
 	ZRAM_COMP_PRIORITY_BIT1,	/* first bit of secondary compressor priority */
 	ZRAM_COMP_PRIORITY_BIT2,	/* second bit of secondary compressor priority */
 #endif
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	ZRAM_RECOMP_CANDIDATE,	/* untouched since candidate scan */
+#endif
 
 	__NR_ZRAM_PAGEFLAGS,
 };
@@ -98,6 +102,10 @@ struct zram_stats {
 	atomic_long_t max_used_pages;	/* no. of maximum pages stored */
 	atomic64_t writestall;		/* no. of write slow paths */
 	atomic64_t miss_free;		/* no. of missed free */
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	atomic64_t auto_recomp_scans;
+	atomic64_t auto_recomp_pages;
+#endif
 #ifdef	CONFIG_ZRAM_WRITEBACK
 	atomic64_t bd_count;		/* no. of pages in backing device */
 	atomic64_t bd_reads;		/* no. of reads from backing device */
@@ -125,6 +133,12 @@ struct zram {
 	u64 disksize;	/* bytes */
 	const char *comp_algs[ZRAM_MAX_COMPS];
 	s8 num_active_comps;
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	struct delayed_work recomp_work;
+	unsigned long recomp_cursor;
+	unsigned long mark_cursor;
+	bool recomp_primed;
+#endif
 	/*
 	 * zram is claimed so open request will be failed
 	 */
