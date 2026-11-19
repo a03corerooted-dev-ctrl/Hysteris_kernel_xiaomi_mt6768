@@ -2972,12 +2972,17 @@ static void inherit_burst(struct task_struct *p)
 	u8 inherited;
 	u64 now = ktime_get_ns();
 
-	read_lock(&tasklist_lock);
+	/*
+	 * The traversal updates the cached child-burst fields on ancestors.
+	 * Use the write side of tasklist_lock so concurrent forks cannot race
+	 * while refreshing the same cache, and so the child lists stay stable.
+	 */
+	write_lock_irq(&tasklist_lock);
 	if (READ_ONCE(sched_burst_fork_atavistic))
 		inherited = __inherit_burst_topological(p, now);
 	else
 		inherited = __inherit_burst_direct(p, now);
-	read_unlock(&tasklist_lock);
+	write_unlock_irq(&tasklist_lock);
 
 	p->se.bore.prev_burst_penalty =
 		max(p->se.bore.prev_burst_penalty, inherited);
