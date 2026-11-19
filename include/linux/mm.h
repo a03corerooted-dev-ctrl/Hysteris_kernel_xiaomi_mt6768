@@ -1494,31 +1494,26 @@ int copy_page_range(struct mm_struct *dst, struct mm_struct *src,
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 static inline void vm_write_begin(struct vm_area_struct *vma)
 {
-	write_seqcount_begin(&vma->vm_sequence);
-}
-static inline void vm_write_begin_nested(struct vm_area_struct *vma,
-					 int subclass)
-{
-	write_seqcount_begin_nested(&vma->vm_sequence, subclass);
+	if (!RB_EMPTY_NODE(&vma->vm_rb))
+		mmap_assert_write_locked(vma->vm_mm);
+	raw_write_seqcount_begin(&vma->vm_sequence);
 }
 static inline void vm_write_end(struct vm_area_struct *vma)
 {
-	write_seqcount_end(&vma->vm_sequence);
-}
-static inline void vm_raw_write_begin(struct vm_area_struct *vma)
-{
-	raw_write_seqcount_begin(&vma->vm_sequence);
-}
-static inline void vm_raw_write_end(struct vm_area_struct *vma)
-{
 	raw_write_seqcount_end(&vma->vm_sequence);
+}
+static inline bool vma_has_changed(struct vm_fault *vmf)
+{
+	bool removed = RB_EMPTY_NODE(&vmf->vma->vm_rb);
+	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
+
+	smp_rmb();
+	return removed || seq != vmf->sequence;
 }
 #else
 static inline void vm_write_begin(struct vm_area_struct *vma) { }
-static inline void vm_write_begin_nested(struct vm_area_struct *vma, int subclass) { }
 static inline void vm_write_end(struct vm_area_struct *vma) { }
-static inline void vm_raw_write_begin(struct vm_area_struct *vma) { }
-static inline void vm_raw_write_end(struct vm_area_struct *vma) { }
+static inline bool vma_has_changed(struct vm_fault *vmf) { return true; }
 #endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
 
 int follow_pte_pmd(struct mm_struct *mm, unsigned long address,
@@ -1540,6 +1535,45 @@ int generic_error_remove_page(struct address_space *mapping, struct page *page);
 int invalidate_inode_page(struct page *page);
 
 #ifdef CONFIG_MMU
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern struct vm_area_struct *get_vma(struct mm_struct *mm,
+				      unsigned long address);
+extern void put_vma(struct vm_area_struct *vma);
+extern vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
+					     unsigned long address,
+					     unsigned int flags,
+					     struct vm_area_struct **vma,
+					     struct pt_regs *regs);
+static inline vm_fault_t handle_speculative_fault(struct mm_struct *mm,
+						  unsigned long address,
+						  unsigned int flags,
+						  struct vm_area_struct **vma,
+						  struct pt_regs *regs)
+{
+	if (!(flags & FAULT_FLAG_USER) || atomic_read(&mm->mm_users) == 1) {
+		*vma = NULL;
+		return VM_FAULT_RETRY;
+	}
+	return __handle_speculative_fault(mm, address, flags, vma, regs);
+}
+extern bool can_reuse_spf_vma(struct vm_area_struct *vma,
+			      unsigned long address);
+#else
+static inline vm_fault_t handle_speculative_fault(struct mm_struct *mm,
+						  unsigned long address,
+						  unsigned int flags,
+						  struct vm_area_struct **vma,
+						  struct pt_regs *regs)
+{
+	*vma = NULL;
+	return VM_FAULT_RETRY;
+}
+static inline bool can_reuse_spf_vma(struct vm_area_struct *vma,
+				     unsigned long address)
+{
+	return false;
+}
+#endif
 extern vm_fault_t handle_mm_fault(struct vm_area_struct *vma,
 			unsigned long address, unsigned int flags);
 extern int fixup_user_fault(struct task_struct *tsk, struct mm_struct *mm,
