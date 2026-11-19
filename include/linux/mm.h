@@ -1502,7 +1502,12 @@ int copy_page_range(struct mm_struct *dst, struct mm_struct *src,
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 static inline void vm_write_begin(struct vm_area_struct *vma)
 {
-	if (!RB_EMPTY_NODE(&vma->vm_rb))
+	/*
+	 * exit_mmap() tears down the final mm after mm_users reached zero.
+	 * No user fault can run there, and it does not take mmap_lock.
+	 */
+	if (!RB_EMPTY_NODE(&vma->vm_rb) &&
+	    atomic_read(&vma->vm_mm->mm_users) > 0)
 		mmap_assert_write_locked(vma->vm_mm);
 	raw_write_seqcount_begin(&vma->vm_sequence);
 }
