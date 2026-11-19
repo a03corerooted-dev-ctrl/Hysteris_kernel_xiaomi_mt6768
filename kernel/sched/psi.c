@@ -610,12 +610,15 @@ static int psi_poll_worker(void *data)
 {
 	struct psi_group *group = data;
 
-	while (!kthread_should_stop()) {
+	sched_set_fifo_low(current);
+
+	while (true) {
 		wait_event_interruptible(group->poll_wait,
 			atomic_cmpxchg(&group->poll_wakeup, 1, 0) ||
 			kthread_should_stop());
 		if (kthread_should_stop())
 			break;
+
 		psi_poll_work(group);
 	}
 	return 0;
