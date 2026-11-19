@@ -4,6 +4,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
@@ -71,6 +72,8 @@ struct mtk_dram_ctrl {
 	int *perfs;
 	int curr_opp;
 	int qos_ctrl;
+	bool qos_request_owned;
+	struct mutex lock;
 };
 
 struct proc_dir_entry *dram_proc_parent;
@@ -111,44 +114,43 @@ static ssize_t ddr_ctrl_proc_write(struct file *filp, const char *ubuf,
 		size_t cnt, loff_t *data)
 {
 	struct mtk_dram_ctrl *dram_ctrl = PDE_DATA(file_inode(filp));
-
 	char buf[64];
 	int val;
 	int ret;
 
-	if (cnt >= sizeof(buf)) {
-		pr_debug("ddr_write cnt >= sizeof\n");
+	if (cnt >= sizeof(buf))
 		return -EINVAL;
-	}
-	if (copy_from_user(buf, ubuf, cnt)) {
-		pr_debug("ddr_write copy_from_user\n");
+	if (copy_from_user(buf, ubuf, cnt))
 		return -EFAULT;
-	}
-	buf[cnt] = 0;
-	ret = kstrtoint(buf, 10, &val);
-	if (ret < 0) {
-		pr_debug("ddr_write ret < 0\n");
-		return ret;
-	}
 
+	buf[cnt] = '\0';
+	ret = kstrtoint(buf, 10, &val);
+	if (ret)
+		return ret;
+
+	/* -1 releases the request; all other values must name a valid OPP. */
+	if (val < -1 || val >= dram_ctrl->num_perf)
+		return -EINVAL;
+
+	mutex_lock(&dram_ctrl->lock);
 	if (dram_ctrl->qos_ctrl) {
-		if ((val > -1) && (val < dram_ctrl->num_perf))
-			mtk_pm_qos_update_request(&ddr_request,
-				dram_ctrl->perfs[val]);
-		else
+		if (val == -1)
 			mtk_pm_qos_update_request(&ddr_request,
 				MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
-	} else {
-		if ((val > -1) && (val < dram_ctrl->num_perf))
-			dev_pm_genpd_set_performance_state(
-				dram_ctrl->dev,
-				dram_ctrl->perfs[val]);
 		else
-			dev_pm_genpd_set_performance_state(
-				dram_ctrl->dev, 0);
+			mtk_pm_qos_update_request(&ddr_request,
+				dram_ctrl->perfs[val]);
+	} else {
+		ret = dev_pm_genpd_set_performance_state(dram_ctrl->dev,
+			val == -1 ? 0 : dram_ctrl->perfs[val]);
+		if (ret < 0) {
+			mutex_unlock(&dram_ctrl->lock);
+			return ret;
+		}
 	}
 
 	dram_ctrl->curr_opp = val;
+	mutex_unlock(&dram_ctrl->lock);
 
 	return cnt;
 }
@@ -157,7 +159,9 @@ static int ddr_ctrl_proc_show(struct seq_file *m, void *v)
 {
 	struct mtk_dram_ctrl *dram_ctrl = m->private;
 
+	mutex_lock(&dram_ctrl->lock);
 	seq_printf(m, "%d\n", dram_ctrl->curr_opp);
+	mutex_unlock(&dram_ctrl->lock);
 
 	return 0;
 }
@@ -182,11 +186,13 @@ static int mtk_dram_ctrl_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *node = pdev->dev.of_node;
 	int i;
+	int ret;
 
 	dram_ctrl = devm_kzalloc(dev, sizeof(*dram_ctrl), GFP_KERNEL);
 	if (!dram_ctrl)
 		return -ENOMEM;
 
+	mutex_init(&dram_ctrl->lock);
 	dram_ctrl->num_perf = of_count_phandle_with_args(node,
 		   "required-opps", NULL);
 
@@ -199,16 +205,21 @@ static int mtk_dram_ctrl_probe(struct platform_device *pdev)
 			return -ENOMEM;
 
 		for (i = 0; i < dram_ctrl->num_perf; i++) {
-			dram_ctrl->perfs[i] =
-				dvfsrc_get_required_opp_performance_state(node, i);
+			ret = dvfsrc_get_required_opp_performance_state(node, i);
+			if (ret < 0)
+				return ret;
+			dram_ctrl->perfs[i] = ret;
 		}
 	} else
 		dram_ctrl->num_perf = 0;
 
 	if (of_device_is_compatible(node, "mediatek,dram-qosctrl")) {
-		mtk_pm_qos_add_request(&ddr_request, MTK_PM_QOS_DDR_OPP,
-			MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
 		dram_ctrl->qos_ctrl = 1;
+		if (!mtk_pm_qos_request_active(&ddr_request)) {
+			mtk_pm_qos_add_request(&ddr_request, MTK_PM_QOS_DDR_OPP,
+				MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
+			dram_ctrl->qos_request_owned = true;
+		}
 	}
 
 	dram_ctrl->curr_opp = dram_ctrl->num_perf;
@@ -217,22 +228,52 @@ static int mtk_dram_ctrl_probe(struct platform_device *pdev)
 
 	dram_ctrl->proc_dir = proc_mkdir("dram_ctrl", dram_proc_parent);
 	if (!dram_ctrl->proc_dir) {
-		pr_debug("drams_dir not create success\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_qos;
 	}
 
-	proc_create_data("ddr", 0644,
-		dram_ctrl->proc_dir, &ddr_ctrl_proc_fops, dram_ctrl);
+	if (!proc_create_data("ddr", 0644, dram_ctrl->proc_dir,
+			      &ddr_ctrl_proc_fops, dram_ctrl)) {
+		remove_proc_subtree("dram_ctrl", dram_proc_parent);
+		ret = -ENOMEM;
+		goto err_qos;
+	}
 
 #ifdef MTK_K14_DRM_BOOST
 	qos_has_dts_support = 1;
 #endif
 
 	return 0;
+
+err_qos:
+	if (dram_ctrl->qos_request_owned) {
+		mtk_pm_qos_remove_request(&ddr_request);
+		dram_ctrl->qos_request_owned = false;
+	}
+	return ret;
 }
 
 static int mtk_dram_ctrl_remove(struct platform_device *pdev)
 {
+	struct mtk_dram_ctrl *dram_ctrl = platform_get_drvdata(pdev);
+
+	if (dram_ctrl) {
+		mutex_lock(&dram_ctrl->lock);
+		if (dram_ctrl->qos_ctrl) {
+			if (dram_ctrl->qos_request_owned) {
+				mtk_pm_qos_update_request(&ddr_request,
+					MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
+				mtk_pm_qos_remove_request(&ddr_request);
+				dram_ctrl->qos_request_owned = false;
+			}
+		} else {
+			dev_pm_genpd_set_performance_state(dram_ctrl->dev, 0);
+		}
+		mutex_unlock(&dram_ctrl->lock);
+	}
+	if (dram_proc_parent)
+		remove_proc_subtree("dram_ctrl", dram_proc_parent);
+
 	return 0;
 }
 
@@ -529,12 +570,22 @@ int dram_ctrl_init(struct proc_dir_entry *parent)
 {
 	int ret = 0;
 
+	if (!parent)
+		return -EINVAL;
+
 	dram_proc_parent = parent;
 	ret = platform_driver_register(&mtk_dram_ctrl_driver);
+	if (ret)
+		return ret;
 
 #ifdef MTK_K14_DRM_BOOST
-	if (!qos_has_dts_support)
-		dram_ctrl_init_with_no_dts_support(parent);
+	if (!qos_has_dts_support) {
+		ret = dram_ctrl_init_with_no_dts_support(parent);
+		if (ret) {
+			platform_driver_unregister(&mtk_dram_ctrl_driver);
+			remove_proc_subtree("dram_ctrl", parent);
+		}
+	}
 #endif
 
 	return ret;
@@ -543,6 +594,8 @@ int dram_ctrl_init(struct proc_dir_entry *parent)
 void dram_ctrl_exit(void)
 {
 	platform_driver_unregister(&mtk_dram_ctrl_driver);
+	if (dram_proc_parent)
+		remove_proc_subtree("dram_ctrl", dram_proc_parent);
 }
 
 
