@@ -989,7 +989,7 @@ int psi_show(struct seq_file *m, struct psi_group *group, enum psi_res res)
 		int w;
 
 		/* CPU FULL is undefined at the system level. */
-		if (!(group == &psi_system && res == PSI_CPU)) {
+		if (!(group == &psi_system && res == PSI_CPU && full)) {
 			for (w = 0; w < 3; w++)
 				avg[w] = group->avg[res * 2 + full][w];
 			total = div_u64(group->total[PSI_AVGS][res * 2 + full],
