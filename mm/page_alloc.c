@@ -68,6 +68,7 @@
 #include <linux/nmi.h>
 #include <linux/khugepaged.h>
 #include <linux/psi.h>
+#include <linux/acclaim.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -4649,6 +4650,9 @@ out:
 		__free_pages(page, order);
 		page = NULL;
 	}
+
+	if (page)
+		acclaim_record_allocation(order);
 
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
 
