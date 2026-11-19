@@ -11,6 +11,7 @@ int init_boostctrl(struct proc_dir_entry *parent);
 
 /*dram controller*/
 int dram_ctrl_init(struct proc_dir_entry *parent);
+void dram_ctrl_exit(void);
 
 /*topology controller*/
 int topo_ctrl_init(struct proc_dir_entry *parent);
