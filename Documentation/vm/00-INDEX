@@ -2,6 +2,8 @@
 	- this file.
 active_mm.rst
 	- An explanation from Linus about tsk->active_mm vs tsk->mm.
+almk-selective-backport.rst
+\t- Audit of selective Qualcomm ALMK reclaim backport compatibility.
 balance.rst
 	- various information on memory balancing.
 cleancache.rst
