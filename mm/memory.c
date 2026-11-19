@@ -232,6 +232,16 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			   unsigned long addr)
 {
 	pgtable_t token = pmd_pgtable(*pmd);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	/*
+	 * A speculative fault can hold the PTE lock without mmap_sem.
+	 * Synchronize with it before the page-table page (and its split
+	 * lock, when present) can be detached and reclaimed.
+	 */
+	spinlock_t *ptl = pmd_lock(tlb->mm, pmd);
+
+	spin_unlock(ptl);
+#endif
 	pmd_clear(pmd);
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
