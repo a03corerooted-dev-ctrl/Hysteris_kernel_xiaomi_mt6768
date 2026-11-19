@@ -2447,16 +2447,22 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 				 * against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
+				/*
+				 * Stack expansion runs under mmap_sem read lock;
+				 * page_table_lock serializes concurrent expanders.
+				 */
+				raw_write_seqcount_begin(&vma->vm_sequence);
 				if (vma->vm_flags & VM_LOCKED)
 					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
 				anon_vma_interval_tree_pre_update_vma(vma);
-				vma->vm_end = address;
+				WRITE_ONCE(vma->vm_end, address);
 				anon_vma_interval_tree_post_update_vma(vma);
 				if (vma->vm_next)
 					vma_gap_update(vma->vm_next);
 				else
 					mm->highest_vm_end = vm_end_gap(vma);
+				raw_write_seqcount_end(&vma->vm_sequence);
 				spin_unlock(&mm->page_table_lock);
 
 				perf_event_mmap(vma);
@@ -2527,14 +2533,20 @@ int expand_downwards(struct vm_area_struct *vma,
 				 * against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
+				/*
+				 * Stack expansion runs under mmap_sem read lock;
+				 * page_table_lock serializes concurrent expanders.
+				 */
+				raw_write_seqcount_begin(&vma->vm_sequence);
 				if (vma->vm_flags & VM_LOCKED)
 					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
 				anon_vma_interval_tree_pre_update_vma(vma);
-				vma->vm_start = address;
-				vma->vm_pgoff -= grow;
+				WRITE_ONCE(vma->vm_start, address);
+				WRITE_ONCE(vma->vm_pgoff, vma->vm_pgoff - grow);
 				anon_vma_interval_tree_post_update_vma(vma);
 				vma_gap_update(vma);
+				raw_write_seqcount_end(&vma->vm_sequence);
 				spin_unlock(&mm->page_table_lock);
 
 				perf_event_mmap(vma);
