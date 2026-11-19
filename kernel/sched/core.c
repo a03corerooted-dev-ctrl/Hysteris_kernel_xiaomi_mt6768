@@ -2886,14 +2886,15 @@ static void __update_child_burst_cache(struct task_struct *p,
 	p->se.child_burst_last_cached = now;
 }
 
-static void update_child_burst_direct(struct task_struct *p, u64 now)
+static void update_child_burst_direct(struct task_struct *p,
+				      struct task_struct *exclude, u64 now)
 {
 	struct task_struct *child;
 	u32 count = 0;
 	u32 sum = 0;
 
 	list_for_each_entry(child, &p->children, sibling) {
-		if (!task_is_inheritable(child))
+		if (child == exclude || !task_is_inheritable(child))
 			continue;
 		count++;
 		sum += child->se.bore.burst_penalty;
@@ -2907,13 +2908,15 @@ static u8 __inherit_burst_direct(struct task_struct *p, u64 now)
 	struct task_struct *parent = p->real_parent;
 
 	if (child_burst_cache_expired(parent, now))
-		update_child_burst_direct(parent, now);
+		update_child_burst_direct(parent, p, now);
 
 	return parent->se.bore.child_burst;
 }
 
-static void update_child_burst_topological(struct task_struct *p, u64 now,
-					   u32 depth, u32 *total_count,
+static void update_child_burst_topological(struct task_struct *p,
+					   struct task_struct *exclude,
+					   u64 now, u32 depth,
+					   u32 *total_count,
 					   u32 *total_sum)
 {
 	struct task_struct *child, *descendant;
@@ -2925,6 +2928,12 @@ static void update_child_burst_topological(struct task_struct *p, u64 now,
 		while ((descendant_count = count_child_tasks(descendant)) == 1)
 			descendant = list_first_entry(&descendant->children,
 						      struct task_struct, sibling);
+
+		/* The new child is already on the task list; never average it into
+		 * its own inherited burst score (its initial penalty is zero).
+		 */
+		if (descendant == exclude)
+			continue;
 
 		if (!descendant_count || !depth) {
 			if (!task_is_inheritable(descendant))
@@ -2941,8 +2950,8 @@ static void update_child_burst_topological(struct task_struct *p, u64 now,
 			continue;
 		}
 
-		update_child_burst_topological(descendant, now, depth - 1,
-					       &count, &sum);
+		update_child_burst_topological(descendant, exclude, now,
+					       depth - 1, &count, &sum);
 	}
 
 	__update_child_burst_cache(p, count, sum, now);
@@ -2960,7 +2969,7 @@ static u8 __inherit_burst_topological(struct task_struct *p, u64 now)
 		ancestor = ancestor->real_parent;
 
 	if (child_burst_cache_expired(ancestor, now))
-		update_child_burst_topological(ancestor, now,
+		update_child_burst_topological(ancestor, p, now,
 			READ_ONCE(sched_burst_fork_atavistic) - 1,
 			&count, &sum);
 
