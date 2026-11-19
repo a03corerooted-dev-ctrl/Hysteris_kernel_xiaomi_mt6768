@@ -10,6 +10,7 @@
  * the NFS filesystem used to do this differently, for example)
  */
 #include <linux/export.h>
+#include <linux/init.h>
 #include <linux/compiler.h>
 #include <linux/dax.h>
 #include <linux/fs.h>
@@ -2551,7 +2552,7 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 		if (!page)
 			return VM_FAULT_RETRY;
 		if (PageReadahead(page) || PageCompound(page) ||
-		    !trylock_page(page)) {
+		    PageHWPoison(page) || !trylock_page(page)) {
 			put_page(page);
 			return VM_FAULT_RETRY;
 		}
