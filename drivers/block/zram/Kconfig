@@ -80,7 +80,7 @@ config ZRAM_AUTO_RECOMP_INTERVAL
 	  candidate marking and a later processing pass to be eligible.
 
 config ZRAM_AUTO_RECOMP_PAGES
-	int "ZRAM slots scanned per automatic pass"
+	int "ZRAM slots per automatic mark/process window"
 	depends on ZRAM_AUTO_RECOMP
 	range 256 65536
 	default 16384
