@@ -3264,11 +3264,13 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	update_mmu_cache(vma, vmf->address, vmf->pte);
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	vmf->pte = NULL;
 out:
 	return ret;
 out_nomap:
 	mem_cgroup_cancel_charge(page, memcg, false);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	vmf->pte = NULL;
 out_page:
 	unlock_page(page);
 out_release:
@@ -3385,6 +3387,7 @@ setpte:
 	update_mmu_cache(vma, vmf->address, vmf->pte);
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	vmf->pte = NULL;
 	return ret;
 release:
 	mem_cgroup_cancel_charge(page, memcg, false);
@@ -3728,8 +3731,10 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		ret = check_stable_address_space(vmf->vma->vm_mm);
 	if (!ret)
 		ret = alloc_set_pte(vmf, vmf->memcg, page);
-	if (vmf->pte)
+	if (vmf->pte) {
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
+		vmf->pte = NULL;
+	}
 	return ret;
 }
 
@@ -4277,6 +4282,7 @@ skip_pmd_checks:
 	}
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	vmf->pte = NULL;
 	return ret;
 }
 
