@@ -766,7 +766,10 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	}
 
 	/* mprotect_fixup is overkill to remove the temporary stack flags */
-	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags,
+		   vma->vm_flags & ~VM_STACK_INCOMPLETE_SETUP);
+	vm_write_end(vma);
 
 	stack_expand = 131072UL; /* randomly 32*4k (or 2*64k) pages */
 	stack_size = vma->vm_end - vma->vm_start;
