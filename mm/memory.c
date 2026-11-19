@@ -4338,6 +4338,14 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	vmf.vma_flags = READ_ONCE(vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vma->vm_page_prot);
 
+	/*
+	 * get_vma() pins the object, but a VMA can be detached just before
+	 * this sequence snapshot. Reject a detached VMA before any early
+	 * permission or UFFD result; later PTE locks repeat this check.
+	 */
+	if (vma_has_changed(&vmf))
+		return VM_FAULT_RETRY;
+
 #ifdef CONFIG_USERFAULTFD
 	/*
 	 * Only SIGBUS+MISSING userfaults on private anonymous VMAs are
