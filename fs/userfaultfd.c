@@ -30,6 +30,7 @@
 #include <linux/ioctl.h>
 #include <linux/security.h>
 #include <linux/hugetlb.h>
+#include <linux/rcupdate.h>
 
 int sysctl_unprivileged_userfaultfd __read_mostly;
 
@@ -72,7 +73,12 @@ struct userfaultfd_ctx {
 	bool mmap_changing;
 	/* mm with one ore more vmas attached to this userfaultfd_ctx */
 	struct mm_struct *mm;
+	struct rcu_head rcu;
 };
+
+#define userfaultfd_ctx_from_vma(vma) \
+	rcu_dereference_protected((vma)->vm_userfaultfd_ctx.ctx, \
+				  lockdep_is_held(&(vma)->vm_mm->mmap_lock))
 
 struct userfaultfd_fork_ctx {
 	struct userfaultfd_ctx *orig;
@@ -177,9 +183,38 @@ static void userfaultfd_ctx_put(struct userfaultfd_ctx *ctx)
 		VM_BUG_ON(spin_is_locked(&ctx->fd_wqh.lock));
 		VM_BUG_ON(waitqueue_active(&ctx->fd_wqh));
 		mmdrop(ctx->mm);
-		kmem_cache_free(userfaultfd_ctx_cachep, ctx);
+		call_rcu(&ctx->rcu, userfaultfd_ctx_free_rcu);
 	}
 }
+
+static void userfaultfd_ctx_free_rcu(struct rcu_head *rcu)
+{
+	struct userfaultfd_ctx *ctx =
+		container_of(rcu, struct userfaultfd_ctx, rcu);
+
+	kmem_cache_free(userfaultfd_ctx_cachep, ctx);
+}
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+bool userfaultfd_using_sigbus(struct vm_fault *vmf)
+{
+	struct userfaultfd_ctx *ctx;
+	bool ret = false;
+
+	rcu_read_lock();
+	/*
+	 * The VMA itself is pinned by SPF. Check its sequence before
+	 * dereferencing the RCU-protected userfaultfd context: a writer
+	 * may have replaced the pointer before this RCU read-side section.
+	 */
+	if (!vma_has_changed(vmf)) {
+		ctx = rcu_dereference(vmf->vma->vm_userfaultfd_ctx.ctx);
+		ret = ctx && (READ_ONCE(ctx->features) & UFFD_FEATURE_SIGBUS);
+	}
+	rcu_read_unlock();
+	return ret;
+}
+#endif
 
 static inline void msg_init(struct uffd_msg *msg)
 {
@@ -403,7 +438,7 @@ vm_fault_t handle_userfault(struct vm_fault *vmf, unsigned long reason)
 	 */
 	mmap_assert_locked(mm);
 
-	ctx = vmf->vma->vm_userfaultfd_ctx.ctx;
+	ctx = userfaultfd_ctx_from_vma(vmf->vma);
 	if (!ctx)
 		goto out;
 
@@ -646,9 +681,12 @@ static void userfaultfd_event_wait_completion(struct userfaultfd_ctx *ctx,
 		/* no task can run (and in turn coredump) yet */
 		VM_WARN_ON(!mmget_still_valid(mm));
 		for (vma = mm->mmap; vma; vma = vma->vm_next)
-			if (vma->vm_userfaultfd_ctx.ctx == release_new_ctx) {
-				vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-				vma->vm_flags &= ~__VM_UFFD_FLAGS;
+			if (rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) ==
+			    release_new_ctx) {
+				vm_write_begin(vma);
+				rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, NULL);
+				WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+				vm_write_end(vma);
 			}
 		mmap_write_unlock(mm);
 
@@ -677,10 +715,12 @@ int dup_userfaultfd(struct vm_area_struct *vma, struct list_head *fcs)
 	struct userfaultfd_ctx *ctx = NULL, *octx;
 	struct userfaultfd_fork_ctx *fctx;
 
-	octx = vma->vm_userfaultfd_ctx.ctx;
+	octx = userfaultfd_ctx_from_vma(vma);
 	if (!octx || !(octx->features & UFFD_FEATURE_EVENT_FORK)) {
-		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-		vma->vm_flags &= ~__VM_UFFD_FLAGS;
+		vm_write_begin(vma);
+		rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, NULL);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+		vm_write_end(vma);
 		return 0;
 	}
 
@@ -716,7 +756,9 @@ int dup_userfaultfd(struct vm_area_struct *vma, struct list_head *fcs)
 		list_add_tail(&fctx->list, fcs);
 	}
 
-	vma->vm_userfaultfd_ctx.ctx = ctx;
+	vm_write_begin(vma);
+	rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, ctx);
+	vm_write_end(vma);
 	return 0;
 }
 
@@ -749,7 +791,7 @@ void mremap_userfaultfd_prep(struct vm_area_struct *vma,
 {
 	struct userfaultfd_ctx *ctx;
 
-	ctx = vma->vm_userfaultfd_ctx.ctx;
+	ctx = userfaultfd_ctx_from_vma(vma);
 
 	if (!ctx)
 		return;
@@ -835,7 +877,7 @@ int userfaultfd_unmap_prep(struct vm_area_struct *vma,
 {
 	for ( ; vma && vma->vm_start < end; vma = vma->vm_next) {
 		struct userfaultfd_unmap_ctx *unmap_ctx;
-		struct userfaultfd_ctx *ctx = vma->vm_userfaultfd_ctx.ctx;
+		struct userfaultfd_ctx *ctx = userfaultfd_ctx_from_vma(vma);
 
 		if (!ctx || !(ctx->features & UFFD_FEATURE_EVENT_UNMAP) ||
 		    has_unmap_ctx(ctx, unmaps, start, end))
@@ -905,7 +947,7 @@ static int userfaultfd_release(struct inode *inode, struct file *file)
 		cond_resched();
 		BUG_ON(!!vma->vm_userfaultfd_ctx.ctx ^
 		       !!(vma->vm_flags & __VM_UFFD_FLAGS));
-		if (vma->vm_userfaultfd_ctx.ctx != ctx) {
+		if (rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) != ctx) {
 			prev = vma;
 			continue;
 		}
@@ -922,8 +964,10 @@ static int userfaultfd_release(struct inode *inode, struct file *file)
 			else
 				prev = vma;
 		}
-		vma->vm_flags = new_flags;
-		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, new_flags);
+		rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, NULL);
+		vm_write_end(vma);
 	}
 	mmap_write_unlock(mm);
 	mmput(mm);
@@ -1429,8 +1473,8 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		 * wouldn't know which one to deliver the userfaults to.
 		 */
 		ret = -EBUSY;
-		if (cur->vm_userfaultfd_ctx.ctx &&
-		    cur->vm_userfaultfd_ctx.ctx != ctx)
+		if (rcu_access_pointer(cur->vm_userfaultfd_ctx.ctx) &&
+		    rcu_access_pointer(cur->vm_userfaultfd_ctx.ctx) != ctx)
 			goto out_unlock;
 
 		/*
@@ -1459,7 +1503,7 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		 * Nothing to do: this vma is already registered into this
 		 * userfaultfd and with the right tracking mode too.
 		 */
-		if (vma->vm_userfaultfd_ctx.ctx == ctx &&
+		if (rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) == ctx &&
 		    (vma->vm_flags & vm_flags) == vm_flags)
 			goto skip;
 
@@ -1493,8 +1537,10 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		 * the next vma was merged into the current one and
 		 * the current one has not been updated yet.
 		 */
-		vma->vm_flags = new_flags;
-		vma->vm_userfaultfd_ctx.ctx = ctx;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, new_flags);
+		rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, ctx);
+		vm_write_end(vma);
 
 		if (is_vm_hugetlb_page(vma) && uffd_disable_huge_pmd_share(vma))
 			hugetlb_unshare_all_pmds(vma);
@@ -1618,7 +1664,7 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 		 * Nothing to do: this vma is already registered into this
 		 * userfaultfd and with the right tracking mode too.
 		 */
-		if (!vma->vm_userfaultfd_ctx.ctx)
+		if (!rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx))
 			goto skip;
 
 		WARN_ON(!(vma->vm_flags & VM_MAYWRITE));
@@ -1637,7 +1683,7 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 			struct userfaultfd_wake_range range;
 			range.start = start;
 			range.len = vma_end - start;
-			wake_userfault(vma->vm_userfaultfd_ctx.ctx, &range);
+			wake_userfault(userfaultfd_ctx_from_vma(vma), &range);
 		}
 
 		new_flags = vma->vm_flags & ~__VM_UFFD_FLAGS;
