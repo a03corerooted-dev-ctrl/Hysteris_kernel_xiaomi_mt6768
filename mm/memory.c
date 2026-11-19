@@ -2139,6 +2139,10 @@ EXPORT_SYMBOL_GPL(apply_to_page_range);
  * proceeding (but do_wp_page is only called after already making such a check;
  * and do_anonymous_page can safely check later on).
  */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static bool pte_spinlock(struct vm_fault *vmf);
+#endif
+
 static inline int pte_unmap_same(struct vm_fault *vmf)
 {
 	int ret = 0;
@@ -2239,7 +2243,7 @@ static bool pte_map_lock(struct vm_fault *vmf)
 	return __pte_map_lock_speculative(vmf, vmf->address);
 }
 
-static bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr)
+static inline bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr)
 {
 	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
 		vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
