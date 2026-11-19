@@ -2287,6 +2287,10 @@ static bool vmf_allows_speculation(struct vm_fault *vmf)
 		return READ_ONCE(vma->anon_vma) != NULL;
 	}
 
+	/* File-backed COW faults still require anon_vma_prepare(). */
+	if (vmf->flags & FAULT_FLAG_WRITE)
+		return false;
+
 	/*
 	 * File-backed VMAs opt in through their vm_ops. The callback must
 	 * guarantee that its fault handler supports FAULT_FLAG_SPECULATIVE.
