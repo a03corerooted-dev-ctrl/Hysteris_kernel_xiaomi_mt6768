@@ -2281,7 +2281,7 @@ static bool vmf_allows_speculation(struct vm_fault *vmf)
 
 	/* Shared/device/stack/userfaultfd mappings retain the locked path. */
 	if (vmf->vma_flags & (VM_SHARED | VM_PFNMAP | VM_MIXEDMAP | VM_IO |
-			      __VM_UFFD_FLAGS | VM_GROWSDOWN | VM_GROWSUP))
+			      VM_GROWSDOWN | VM_GROWSUP))
 		return false;
 
 	if (vma_is_anonymous(vma)) {
@@ -4317,6 +4317,7 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	pud_t pudval;
 	unsigned int seq;
 	vm_fault_t ret;
+	bool uffd_missing_sigbus = false;
 
 	vmf.flags |= FAULT_FLAG_SPECULATIVE;
 	seq = raw_read_seqcount(&vma->vm_sequence);
@@ -4326,6 +4327,24 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	vmf.sequence = seq;
 	vmf.vma_flags = READ_ONCE(vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vma->vm_page_prot);
+
+#ifdef CONFIG_USERFAULTFD
+	/*
+	 * Only SIGBUS+MISSING userfaults on private anonymous VMAs are
+	 * supported speculatively. All user-managed and other UFFD modes
+	 * must use the ordinary mmap_sem-protected path.
+	 */
+	if (unlikely(vmf.vma_flags & __VM_UFFD_FLAGS)) {
+		uffd_missing_sigbus = vma_is_anonymous(vma) &&
+			(vmf.vma_flags & VM_UFFD_MISSING) &&
+			userfaultfd_using_sigbus(&vmf);
+		if (!uffd_missing_sigbus)
+			return VM_FAULT_RETRY;
+		/* No anon_vma means the PTE is missing. */
+		if (!READ_ONCE(vma->anon_vma))
+			return VM_FAULT_SIGBUS;
+	}
+#endif
 
 	if (!vmf_allows_speculation(&vmf))
 		return VM_FAULT_RETRY;
@@ -4402,6 +4421,10 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 		return VM_FAULT_RETRY;
 	}
 
+	/* An absent PTE is a SIGBUS for UFFD_FEATURE_SIGBUS+MISSING. */
+	if (!vmf.pte && uffd_missing_sigbus)
+		return VM_FAULT_SIGBUS;
+
 	mem_cgroup_enter_user_fault();
 	ret = handle_pte_fault(&vmf);
 	mem_cgroup_exit_user_fault();
@@ -4416,7 +4439,11 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 
 out_walk:
 	local_irq_enable();
-	return VM_FAULT_RETRY;
+	/*
+	 * For SIGBUS+MISSING, an absent or unsupported page-table level is
+	 * equivalent to a missing page. Other UFFD modes always retry.
+	 */
+	return uffd_missing_sigbus ? VM_FAULT_SIGBUS : VM_FAULT_RETRY;
 }
 
 vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
