@@ -253,6 +253,10 @@ a single line of text and contains the following stats separated by whitespace:
 
 = writeback
 
+The Hysteris merlin automatic-recompression build profile disables
+CONFIG_ZRAM_WRITEBACK. The following describes the optional upstream interface;
+it is not enabled in the Hysteris profile.
+
 With CONFIG_ZRAM_WRITEBACK, zram can write idle/incompressible page
 to backing storage rather than keeping it in memory.
 To use the feature, admin should set up backing device via
