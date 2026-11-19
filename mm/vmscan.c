@@ -52,6 +52,7 @@
 #include <linux/psi.h>
 #include <linux/sysfs.h>
 #include <linux/atomic.h>
+#include <linux/acclaim.h>
 #include <linux/spinlock.h>
 
 #include <asm/tlbflush.h>
@@ -3810,6 +3811,7 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 			       struct scan_control *sc)
 {
 	struct zone *zone;
+	unsigned long low_target = 0;
 	int z;
 
 	/* Reclaim a number of pages proportional to the number of zones */
@@ -3820,7 +3822,11 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 			continue;
 
 		sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
+		low_target += max(low_wmark_pages(zone), SWAP_CLUSTER_MAX);
 	}
+
+	sc->nr_to_reclaim = acclaim_adjust_kswapd_reclaim(
+		sc->nr_to_reclaim, low_target);
 
 	/*
 	 * Historically care was taken to put equal pressure on all zones but
