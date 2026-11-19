@@ -799,7 +799,7 @@ void mremap_userfaultfd_prep(struct vm_area_struct *vma,
 		return;
 
 	if (ctx->features & UFFD_FEATURE_EVENT_REMAP) {
-		vm_ctx->ctx = ctx;
+		vm_ctx->ctx = RCU_INITIALIZER(ctx);
 		userfaultfd_ctx_get(ctx);
 		WRITE_ONCE(ctx->mmap_changing, true);
 	} else {
@@ -815,7 +815,7 @@ void mremap_userfaultfd_complete(struct vm_userfaultfd_ctx *vm_ctx,
 				 unsigned long from, unsigned long to,
 				 unsigned long len)
 {
-	struct userfaultfd_ctx *ctx = vm_ctx->ctx;
+	struct userfaultfd_ctx *ctx = rcu_access_pointer(vm_ctx->ctx);
 	struct userfaultfd_wait_queue ewq;
 
 	if (!ctx)
@@ -1638,7 +1638,7 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 	for (cur = vma; cur && cur->vm_start < end; cur = cur->vm_next) {
 		cond_resched();
 
-		BUG_ON(!!cur->vm_userfaultfd_ctx.ctx ^
+		BUG_ON(!!rcu_access_pointer(cur->vm_userfaultfd_ctx.ctx) ^
 		       !!(cur->vm_flags & __VM_UFFD_FLAGS));
 
 		/*
