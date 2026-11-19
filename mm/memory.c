@@ -3339,6 +3339,16 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		goto setpte;
 	}
 
+	/*
+	 * In this 4.19 tree anon_vma_prepare() still walks/allocates the
+	 * VMA's anon_vma chain even when anon_vma is already present. That
+	 * requires mmap_sem. Speculative missing-page reads are therefore
+	 * limited to the zero-page case above; page allocation and write
+	 * faults retry through the ordinary fault path.
+	 */
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE)
+		return VM_FAULT_RETRY;
+
 	/* Allocate our own private page. */
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
