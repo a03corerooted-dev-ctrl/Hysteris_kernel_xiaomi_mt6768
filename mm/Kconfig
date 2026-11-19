@@ -294,6 +294,18 @@ config MMU_NOTIFIER
 	bool
 	select SRCU
 
+config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+	def_bool n
+
+config SPECULATIVE_PAGE_FAULT
+	bool "Speculative page faults"
+	default y
+	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+	depends on MMU && SMP && !NUMA
+	help
+	  Handle supported user page faults without holding mmap_sem. Races with
+	  VMA or page-table changes fall back to the traditional fault path.
+
 config KSM
 	bool "Enable KSM for page merging"
 	depends on MMU
