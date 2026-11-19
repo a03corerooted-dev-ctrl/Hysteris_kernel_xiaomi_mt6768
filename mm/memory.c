@@ -2289,8 +2289,14 @@ static bool vmf_allows_speculation(struct vm_fault *vmf)
 		return READ_ONCE(vma->anon_vma) != NULL;
 	}
 
-	/* File-backed COW faults still require anon_vma_prepare(). */
-	if (vmf->flags & FAULT_FLAG_WRITE)
+	/*
+	 * Private file-backed COW needs an already established anon_vma:
+	 * creating one would walk neighbouring VMAs without mmap_sem.
+	 * anon_vma_prepare() has a fast path for this existing case.
+	 */
+	if (!(vmf->vma_flags & VM_SHARED) &&
+	    (vmf->flags & FAULT_FLAG_WRITE) &&
+	    !READ_ONCE(vma->anon_vma))
 		return false;
 
 	/*
