@@ -2542,6 +2542,34 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	struct page *page;
 	vm_fault_t ret = 0;
 
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		/*
+		 * The speculative path is cache-hit only: never start I/O,
+		 * readahead, or wait for a page lock without mmap_sem.
+		 */
+		page = find_get_page(mapping, offset);
+		if (!page)
+			return VM_FAULT_RETRY;
+		if (PageReadahead(page) || PageCompound(page) ||
+		    !trylock_page(page)) {
+			put_page(page);
+			return VM_FAULT_RETRY;
+		}
+		if (page->mapping != mapping || !PageUptodate(page)) {
+			unlock_page(page);
+			put_page(page);
+			return VM_FAULT_RETRY;
+		}
+		max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+		if (unlikely(offset >= max_off)) {
+			unlock_page(page);
+			put_page(page);
+			return VM_FAULT_RETRY;
+		}
+		vmf->page = page;
+		return VM_FAULT_LOCKED;
+	}
+
 	max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
 	if (unlikely(offset >= max_off))
 		return VM_FAULT_SIGBUS;
@@ -2772,10 +2800,21 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+bool filemap_allow_speculation(void)
+{
+	return true;
+}
+EXPORT_SYMBOL_GPL(filemap_allow_speculation);
+#endif
+
 const struct vm_operations_struct generic_file_vm_ops = {
 	.fault		= filemap_fault,
 	.map_pages	= filemap_map_pages,
 	.page_mkwrite	= filemap_page_mkwrite,
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	.allow_speculation = filemap_allow_speculation,
+#endif
 };
 
 /* This is used for a general mmap of a disk file */
