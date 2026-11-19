@@ -3029,6 +3029,18 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	int exclusive = 0;
 	vm_fault_t ret = 0;
 
+#ifdef CONFIG_KSM
+	/*
+	 * ksm_might_need_to_copy() may inspect mutable VMA state. Keep swap
+	 * faults on the mmap_sem path whenever KSM is enabled.
+	 */
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		pte_unmap(vmf->pte);
+		vmf->pte = NULL;
+		return VM_FAULT_RETRY;
+	}
+#endif
+
 	if (pte_unmap_same(vmf))
 		goto out;
 
@@ -3084,6 +3096,14 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 				lru_cache_add_anon(page);
 				swap_readpage(page, true);
 			}
+		} else if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+			/*
+			 * Readahead can sleep and depends on the VMA range.
+			 * Retry with mmap_sem when the page is not in swapcache.
+			 */
+			delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
+			ret = VM_FAULT_RETRY;
+			goto out;
 		} else {
 			page = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE,
 						vmf);
