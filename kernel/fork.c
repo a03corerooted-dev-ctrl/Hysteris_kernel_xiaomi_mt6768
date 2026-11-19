@@ -349,7 +349,7 @@ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)
 
 	if (new) {
 		*new = *orig;
-		INIT_LIST_HEAD(&new->anon_vma_chain);
+		INIT_VMA(new);
 	}
 	return new;
 }
@@ -999,6 +999,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->mm_rb = RB_ROOT;
 	mm->vmacache_seqnum = 0;
 	atomic_set(&mm->mm_users, 1);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	rwlock_init(&mm->mm_rb_lock);
+#endif
 	atomic_set(&mm->mm_count, 1);
 	mmap_init_lock(mm);
 	INIT_LIST_HEAD(&mm->mmlist);
