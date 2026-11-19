@@ -2707,10 +2707,17 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
 	vma->vm_prev = NULL;
 	do {
+		/*
+		 * Publish removal before a speculative fault can reuse this VMA.
+		 * PTE teardown below synchronizes with faults already holding a
+		 * PTE lock when this sequence writer begins.
+		 */
+		vm_write_begin(vma);
 		vma_rb_erase(vma, &mm->mm_rb);
 		mm->map_count--;
 		tail_vma = vma;
 		vma = vma->vm_next;
+		vm_write_end(tail_vma);
 	} while (vma && vma->vm_start < end);
 	*insertion_point = vma;
 	if (vma) {
