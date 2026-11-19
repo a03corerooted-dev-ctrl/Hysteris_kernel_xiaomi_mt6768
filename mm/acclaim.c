@@ -10,7 +10,7 @@
 #include <linux/acclaim.h>
 #include <linux/atomic.h>
 #include <linux/kernel.h>
-#include <linux/ktime.h>
+#include <linux/timekeeping.h>
 #include <linux/math64.h>
 #include <linux/limits.h>
 
