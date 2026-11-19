@@ -3,6 +3,7 @@
  * Copyright (c) 2019 MediaTek Inc.
  */
 
+#include <linux/err.h>
 #include <linux/proc_fs.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -67,13 +68,13 @@ static int __init init_perfmgr(void)
 	perfmgr_root = proc_mkdir("perfmgr", NULL);
 	if (!perfmgr_root) {
 		ret = -ENOMEM;
-		goto err_driver;
+		goto err_device;
 	}
 
 	ret = init_boostctrl(perfmgr_root);
 	if (ret) {
 		remove_proc_subtree("perfmgr", NULL);
-		goto err_driver;
+		goto err_device;
 	}
 
 	pr_info("MediaTek perfmgr initialized\n");
