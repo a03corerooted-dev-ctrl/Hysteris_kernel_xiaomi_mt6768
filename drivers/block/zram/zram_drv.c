@@ -1466,6 +1466,10 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	int ret;
 
 	zram_slot_lock(zram, index);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	/* A read invalidates a cold-page candidate before releasing the slot. */
+	zram_clear_flag(zram, index, ZRAM_RECOMP_CANDIDATE);
+#endif
 	if (!zram_test_flag(zram, index, ZRAM_WB)) {
 		ret = zram_read_from_zspool(zram, page, index);
 		zram_slot_unlock(zram, index);
