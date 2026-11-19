@@ -2275,13 +2275,24 @@ static inline bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr)
 
 static bool vmf_allows_speculation(struct vm_fault *vmf)
 {
-	/* File, device, shared, THP and userfaultfd VMAs use the locked path. */
-	if (!vma_is_anonymous(vmf->vma) ||
-	    (vmf->vma_flags & (VM_SHARED | VM_PFNMAP | VM_MIXEDMAP | VM_IO |
-			       __VM_UFFD_FLAGS | VM_GROWSDOWN | VM_GROWSUP)))
+	struct vm_area_struct *vma = vmf->vma;
+
+	/* Shared/device/stack/userfaultfd mappings retain the locked path. */
+	if (vmf->vma_flags & (VM_SHARED | VM_PFNMAP | VM_MIXEDMAP | VM_IO |
+			      __VM_UFFD_FLAGS | VM_GROWSDOWN | VM_GROWSUP))
 		return false;
-	/* anon_vma_prepare() is not safe without mmap_sem. */
-	return READ_ONCE(vmf->vma->anon_vma) != NULL;
+
+	if (vma_is_anonymous(vma)) {
+		/* anon_vma_prepare() is not safe without mmap_sem. */
+		return READ_ONCE(vma->anon_vma) != NULL;
+	}
+
+	/*
+	 * File-backed VMAs opt in through their vm_ops. The callback must
+	 * guarantee that its fault handler supports FAULT_FLAG_SPECULATIVE.
+	 */
+	return vma->vm_ops && vma->vm_ops->allow_speculation &&
+		vma->vm_ops->allow_speculation();
 }
 #else
 static inline bool pte_spinlock(struct vm_fault *vmf)
@@ -3414,7 +3425,10 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 	 *				unlock_page(B)
 	 *				# flush A, B to clear the writeback
 	 */
-	if (pmd_none(*vmf->pmd) && !vmf->prealloc_pte) {
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		if (pmd_none(READ_ONCE(*vmf->pmd)))
+			return VM_FAULT_RETRY;
+	} else if (pmd_none(*vmf->pmd) && !vmf->prealloc_pte) {
 		vmf->prealloc_pte = pte_alloc_one(vmf->vma->vm_mm,
 						  vmf->address);
 		if (!vmf->prealloc_pte)
@@ -3466,6 +3480,12 @@ static int pmd_devmap_trans_unstable(pmd_t *pmd)
 static vm_fault_t pte_alloc_one_map(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
+
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		if (pmd_none(READ_ONCE(*vmf->pmd)))
+			return VM_FAULT_RETRY;
+		return pte_map_lock(vmf) ? 0 : VM_FAULT_RETRY;
+	}
 
 	if (!pmd_none(*vmf->pmd))
 		goto map_pte;
@@ -3625,8 +3645,9 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	pte_t entry;
 	vm_fault_t ret;
 
-	if (pmd_none(*vmf->pmd) && PageTransCompound(page) &&
-			IS_ENABLED(CONFIG_TRANSPARENT_HUGE_PAGECACHE)) {
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE) &&
+	    pmd_none(*vmf->pmd) && PageTransCompound(page) &&
+	    IS_ENABLED(CONFIG_TRANSPARENT_HUGE_PAGECACHE)) {
 		/* THP on COW? */
 		VM_BUG_ON_PAGE(memcg, page);
 
@@ -3851,7 +3872,8 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	 * if page by the offset is not ready to be mapped (cold cache or
 	 * something).
 	 */
-	if (vma->vm_ops->map_pages && fault_around_bytes >> PAGE_SHIFT > 1) {
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE) &&
+	    vma->vm_ops->map_pages && fault_around_bytes >> PAGE_SHIFT > 1) {
 		if (likely(!userfaultfd_minor(vmf->vma))) {
 			ret = do_fault_around(vmf);
 			if (ret)
