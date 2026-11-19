@@ -4465,12 +4465,16 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	return ret;
 
 out_walk:
-	local_irq_enable();
 	/*
-	 * For SIGBUS+MISSING, an absent or unsupported page-table level is
-	 * equivalent to a missing page. Other UFFD modes always retry.
+	 * An absent page-table level is SIGBUS only if the VMA is still
+	 * attached and its metadata snapshot has not changed while walking.
 	 */
-	return uffd_missing_sigbus ? VM_FAULT_SIGBUS : VM_FAULT_RETRY;
+	if (!uffd_missing_sigbus || vma_has_changed(&vmf)) {
+		local_irq_enable();
+		return VM_FAULT_RETRY;
+	}
+	local_irq_enable();
+	return VM_FAULT_SIGBUS;
 }
 
 vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
