@@ -3539,7 +3539,9 @@ void __unmap_hugepage_range_final(struct mmu_gather *tlb,
 	 * because in the context this is called, the VMA is about to be
 	 * destroyed and the i_mmap_rwsem is held.
 	 */
-	vma->vm_flags &= ~VM_MAYSHARE;
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~VM_MAYSHARE);
+	vm_write_end(vma);
 }
 
 void unmap_hugepage_range(struct vm_area_struct *vma, unsigned long start,
