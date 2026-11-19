@@ -4448,8 +4448,16 @@ vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
  */
 bool can_reuse_spf_vma(struct vm_area_struct *vma, unsigned long address)
 {
-	bool ret = !RB_EMPTY_NODE(&vma->vm_rb) &&
-		vma->vm_start <= address && address < vma->vm_end;
+	unsigned int seq;
+	bool ret = false;
+
+	seq = raw_read_seqcount(&vma->vm_sequence);
+	if (!(seq & 1)) {
+		ret = !RB_EMPTY_NODE(&vma->vm_rb) &&
+			READ_ONCE(vma->vm_start) <= address &&
+			address < READ_ONCE(vma->vm_end) &&
+			!read_seqcount_retry(&vma->vm_sequence, seq);
+	}
 
 	put_vma(vma);
 	return ret;
