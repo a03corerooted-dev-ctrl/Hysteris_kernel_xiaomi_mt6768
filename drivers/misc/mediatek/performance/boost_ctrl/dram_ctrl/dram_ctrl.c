@@ -260,9 +260,9 @@ static int mtk_dram_ctrl_remove(struct platform_device *pdev)
 	if (dram_ctrl) {
 		mutex_lock(&dram_ctrl->lock);
 		if (dram_ctrl->qos_ctrl) {
-			mtk_pm_qos_update_request(&ddr_request,
-				MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
 			if (dram_ctrl->qos_request_owned) {
+				mtk_pm_qos_update_request(&ddr_request,
+					MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE);
 				mtk_pm_qos_remove_request(&ddr_request);
 				dram_ctrl->qos_request_owned = false;
 			}
