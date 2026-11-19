@@ -4,6 +4,8 @@ active_mm.rst
 	- An explanation from Linus about tsk->active_mm vs tsk->mm.
 almk-selective-backport.rst
 	- Audit of selective Qualcomm ALMK reclaim backport compatibility.
+spf-backport-status.rst
+	- Initial audit and implementation plan for speculative page faults.
 balance.rst
 	- various information on memory balancing.
 cleancache.rst
