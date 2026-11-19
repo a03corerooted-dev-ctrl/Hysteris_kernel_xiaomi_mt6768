@@ -913,15 +913,35 @@ int psi_cgroup_alloc(struct cgroup *cgroup)
 
 void psi_cgroup_free(struct cgroup *cgroup)
 {
+	struct psi_group *group = &cgroup->psi;
+	struct task_struct *task;
+
 	if (static_branch_likely(&psi_disabled))
 		return;
 
-	cancel_delayed_work_sync(&cgroup->psi.avgs_work);
-	/* Quiesce the timer before freeing the cgroup's PSI state. */
-	del_timer_sync(&cgroup->psi.poll_timer);
-	free_percpu(cgroup->psi.pcpu);
+	cancel_delayed_work_sync(&group->avgs_work);
+
+	/*
+	 * 4.19 has no timer_shutdown_sync(). Prevent new scheduler-hotpath
+	 * users from rearming the timer, drain existing RCU readers, then
+	 * synchronously delete any timer they may have rearmed.
+	 */
+	mutex_lock(&group->trigger_lock);
+	task = rcu_dereference_protected(group->poll_task,
+					 lockdep_is_held(&group->trigger_lock));
+	rcu_assign_pointer(group->poll_task, NULL);
+	del_timer(&group->poll_timer);
+	mutex_unlock(&group->trigger_lock);
+
+	synchronize_rcu();
+	del_timer_sync(&group->poll_timer);
+
+	if (task)
+		kthread_stop(task);
+
+	free_percpu(group->pcpu);
 	/* All triggers must be removed by now */
-	WARN_ONCE(cgroup->psi.poll_states, "psi: trigger leak\n");
+	WARN_ONCE(group->poll_states, "psi: trigger leak\n");
 }
 
 /**
