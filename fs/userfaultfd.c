@@ -158,6 +158,8 @@ out:
  * context.
  * @ctx: [in] Pointer to the userfaultfd context.
  */
+static void userfaultfd_ctx_free_rcu(struct rcu_head *rcu);
+
 static void userfaultfd_ctx_get(struct userfaultfd_ctx *ctx)
 {
 	refcount_inc(&ctx->refcount);
@@ -802,8 +804,10 @@ void mremap_userfaultfd_prep(struct vm_area_struct *vma,
 		WRITE_ONCE(ctx->mmap_changing, true);
 	} else {
 		/* Drop uffd context if remap feature not enabled */
-		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-		vma->vm_flags &= ~__VM_UFFD_FLAGS;
+		vm_write_begin(vma);
+		rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, NULL);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+		vm_write_end(vma);
 	}
 }
 
@@ -839,7 +843,7 @@ bool userfaultfd_remove(struct vm_area_struct *vma,
 	struct userfaultfd_ctx *ctx;
 	struct userfaultfd_wait_queue ewq;
 
-	ctx = vma->vm_userfaultfd_ctx.ctx;
+	ctx = userfaultfd_ctx_from_vma(vma);
 	if (!ctx || !(ctx->features & UFFD_FEATURE_EVENT_REMOVE))
 		return true;
 
@@ -945,7 +949,7 @@ static int userfaultfd_release(struct inode *inode, struct file *file)
 	prev = NULL;
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		cond_resched();
-		BUG_ON(!!vma->vm_userfaultfd_ctx.ctx ^
+		BUG_ON(!!rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) ^
 		       !!(vma->vm_flags & __VM_UFFD_FLAGS));
 		if (rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) != ctx) {
 			prev = vma;
@@ -1432,7 +1436,7 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 	for (cur = vma; cur && cur->vm_start < end; cur = cur->vm_next) {
 		cond_resched();
 
-		BUG_ON(!!cur->vm_userfaultfd_ctx.ctx ^
+		BUG_ON(!!rcu_access_pointer(cur->vm_userfaultfd_ctx.ctx) ^
 		       !!(cur->vm_flags & __VM_UFFD_FLAGS));
 
 		/* check not compatible vmas */
@@ -1495,8 +1499,8 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		cond_resched();
 
 		BUG_ON(!vma_can_userfault(vma, vm_flags));
-		BUG_ON(vma->vm_userfaultfd_ctx.ctx &&
-		       vma->vm_userfaultfd_ctx.ctx != ctx);
+		BUG_ON(rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) &&
+		       rcu_access_pointer(vma->vm_userfaultfd_ctx.ctx) != ctx);
 		WARN_ON(!(vma->vm_flags & VM_MAYWRITE));
 
 		/*
@@ -1515,7 +1519,7 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		prev = vma_merge(mm, prev, start, vma_end, new_flags,
 				 vma->anon_vma, vma->vm_file, vma->vm_pgoff,
 				 vma_policy(vma),
-				 ((struct vm_userfaultfd_ctx){ ctx }),
+				 ((struct vm_userfaultfd_ctx){ .ctx = RCU_INITIALIZER(ctx) }),
 				 vma_get_anon_name(vma));
 		if (prev) {
 			vma = prev;
@@ -1712,8 +1716,10 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 		 * the next vma was merged into the current one and
 		 * the current one has not been updated yet.
 		 */
-		vma->vm_flags = new_flags;
-		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, new_flags);
+		rcu_assign_pointer(vma->vm_userfaultfd_ctx.ctx, NULL);
+		vm_write_end(vma);
 
 	skip:
 		prev = vma;
