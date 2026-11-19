@@ -1142,6 +1142,22 @@ config CHECKPOINT_RESTORE
 
 	  If unsure, say N here.
 
+config SCHED_BORE
+	bool "Burst-Oriented Response Enhancer"
+	depends on 64BIT
+	default n
+	help
+	  Improve interactive response by accounting for the CPU burst duration
+	  of fair-scheduled tasks. Longer uninterrupted bursts receive a gradually
+	  larger virtual-runtime penalty, while sleeping and yielding tasks recover
+	  through configurable smoothing.
+	
+	  The implementation changes only CFS virtual-runtime accounting. It does
+	  not rewrite task load weights or directly modify PELT, schedtune, uclamp
+	  or Energy-Aware Scheduling accounting.
+	
+	  If unsure, say N here.
+
 config SCHED_AUTOGROUP
 	bool "Automatic process group scheduling"
 	select CGROUPS
