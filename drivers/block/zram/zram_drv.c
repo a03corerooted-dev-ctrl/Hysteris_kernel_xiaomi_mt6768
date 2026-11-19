@@ -1923,8 +1923,7 @@ static bool zram_has_higher_recomp_comp(struct zram *zram, u32 priority)
 
 static void zram_auto_recompress_work(struct work_struct *work)
 {
-	struct delayed_work *dwork = to_delayed_work(work);
-	struct zram *zram = container_of(dwork, struct zram, recomp_work);
+	struct zram *zram = container_of(work, struct zram, recomp_work.work);
 	struct page *page = NULL;
 	unsigned long nr_pages, batch, index, i;
 	unsigned int attempts = 0;
@@ -2524,7 +2523,7 @@ static int zram_add(void)
 				return -ENOMEM;
 			}
 		} else {
-			pr_warn("zram: default recompression algorithm %s is unavailable\\n",
+			pr_warn("zram: default recompression algorithm %s is unavailable\n",
 				CONFIG_ZRAM_AUTO_RECOMP_ALGORITHM);
 		}
 	}
