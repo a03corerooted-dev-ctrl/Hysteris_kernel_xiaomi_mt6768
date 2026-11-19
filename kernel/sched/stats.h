@@ -58,9 +58,8 @@ static inline void rq_sched_info_depart  (struct rq *rq, unsigned long long delt
 #ifdef CONFIG_PSI
 /*
  * PSI tracks state that persists across sleeps, such as iowaits and
- * memory stalls. As a result, it has to distinguish between sleeps,
- * where a task's runnable state changes, and requeues, where a task
- * and its state are being moved between CPUs and runqueues.
+ * memory stalls. The context-switch hook accounts transitions that
+ * happen as a task leaves or enters the CPU.
  */
 static inline void psi_enqueue(struct task_struct *p, bool wakeup)
 {
@@ -69,14 +68,14 @@ static inline void psi_enqueue(struct task_struct *p, bool wakeup)
 	if (static_branch_likely(&psi_disabled))
 		return;
 
-	if (!wakeup || p->sched_psi_wake_requeue) {
+	if (p->flags & PF_MEMSTALL)
+		set |= TSK_MEMSTALL_RUNNING;
+
+	if (!wakeup) {
 		if (p->flags & PF_MEMSTALL)
 			set |= TSK_MEMSTALL;
-		if (p->sched_psi_wake_requeue)
-			p->sched_psi_wake_requeue = 0;
-	} else {
-		if (p->in_iowait)
-			clear |= TSK_IOWAIT;
+	} else if (p->in_iowait) {
+		clear |= TSK_IOWAIT;
 	}
 
 	psi_task_change(p, clear, set);
@@ -84,55 +83,43 @@ static inline void psi_enqueue(struct task_struct *p, bool wakeup)
 
 static inline void psi_dequeue(struct task_struct *p, bool sleep)
 {
-	int clear = TSK_RUNNING, set = 0;
-
 	if (static_branch_likely(&psi_disabled))
 		return;
 
-	if (!sleep) {
-		if (p->flags & PF_MEMSTALL)
-			clear |= TSK_MEMSTALL;
-	} else {
-		if (p->in_iowait)
-			set |= TSK_IOWAIT;
-	}
+	/*
+	 * Voluntary sleep transitions are completed by psi_sched_switch().
+	 * A non-sleep dequeue (migration) clears the old CPU's PSI state.
+	 */
+	if (sleep)
+		return;
 
-	psi_task_change(p, clear, set);
+	psi_task_change(p, p->psi_flags, 0);
 }
 
 static inline void psi_ttwu_dequeue(struct task_struct *p)
 {
 	if (static_branch_likely(&psi_disabled))
 		return;
-	/*
-	 * Is the task being migrated during a wakeup? Make sure to
-	 * deregister its sleep-persistent psi states from the old
-	 * queue, and let psi_enqueue() know it has to requeue.
-	 */
-	if (unlikely(p->in_iowait || (p->flags & PF_MEMSTALL))) {
+
+	/* Clear persistent state from the old CPU before a wakeup migration. */
+	if (unlikely(p->psi_flags)) {
 		struct rq_flags rf;
 		struct rq *rq;
-		int clear = 0;
-
-		if (p->in_iowait)
-			clear |= TSK_IOWAIT;
-		if (p->flags & PF_MEMSTALL)
-			clear |= TSK_MEMSTALL;
 
 		rq = __task_rq_lock(p, &rf);
-		psi_task_change(p, clear, 0);
-		p->sched_psi_wake_requeue = 1;
+		psi_task_change(p, p->psi_flags, 0);
 		__task_rq_unlock(rq, &rf);
 	}
 }
 
-static inline void psi_task_tick(struct rq *rq)
+static inline void psi_sched_switch(struct task_struct *prev,
+				    struct task_struct *next,
+				    bool sleep)
 {
 	if (static_branch_likely(&psi_disabled))
 		return;
 
-	if (unlikely(rq->curr->flags & PF_MEMSTALL))
-		psi_memstall_tick(rq->curr, cpu_of(rq));
+	psi_task_switch(prev, next, sleep);
 }
 #else /* CONFIG_PSI */
 static inline void psi_enqueue(struct task_struct *p, bool wakeup) {}
