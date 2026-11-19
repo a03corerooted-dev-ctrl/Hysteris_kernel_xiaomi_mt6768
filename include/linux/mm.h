@@ -518,6 +518,11 @@ struct vm_operations_struct {
 	 * vma to be dumped unconditionally. */
 	const char *(*name)(struct vm_area_struct *vma);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	/* VMA operation explicitly safe to run without mmap_sem. */
+	bool (*allow_speculation)(void);
+#endif
+
 #ifdef CONFIG_NUMA
 	/*
 	 * set_policy() op must add a reference to any non-NULL @new mempolicy
@@ -2541,6 +2546,9 @@ extern void truncate_inode_pages_final(struct address_space *);
 extern vm_fault_t filemap_fault(struct vm_fault *vmf);
 extern void filemap_map_pages(struct vm_fault *vmf,
 		pgoff_t start_pgoff, pgoff_t end_pgoff);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern bool filemap_allow_speculation(void);
+#endif
 extern vm_fault_t filemap_page_mkwrite(struct vm_fault *vmf);
 
 /* mm/page-writeback.c */
