@@ -3008,7 +3008,17 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	if (pte_unmap_same(vmf))
 		goto out;
 
+	if ((vmf->flags & FAULT_FLAG_SPECULATIVE) &&
+	    (vmf->flags & FAULT_FLAG_WRITE)) {
+		ret = VM_FAULT_RETRY;
+		goto out;
+	}
+
 	entry = pte_to_swp_entry(vmf->orig_pte);
+	if ((vmf->flags & FAULT_FLAG_SPECULATIVE) && non_swap_entry(entry)) {
+		ret = VM_FAULT_RETRY;
+		goto out;
+	}
 	if (unlikely(non_swap_entry(entry))) {
 		if (is_migration_entry(entry)) {
 			migration_entry_wait(vma->vm_mm, vmf->pmd,
@@ -4203,6 +4213,170 @@ unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return ret;
 }
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+/*
+ * Speculative fault handling for existing, private anonymous VMAs.
+ *
+ * Page-table levels are only read, never allocated, while mmap_sem is not
+ * held. Any concurrent VMA or page-table writer forces a retry through the
+ * ordinary mmap_sem-protected path.
+ */
+static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
+					       unsigned long address,
+					       unsigned int flags,
+					       struct vm_area_struct *vma)
+{
+	struct vm_fault vmf = {
+		.address = address,
+		.pgoff = linear_page_index(vma, address),
+		.vma = vma,
+		.gfp_mask = __get_fault_gfp_mask(vma),
+		.flags = flags & ~(FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE),
+	};
+	pgd_t *pgd, pgdval;
+	p4d_t *p4d, p4dval;
+	pud_t pudval;
+	unsigned int seq;
+	vm_fault_t ret;
+
+	vmf.flags |= FAULT_FLAG_SPECULATIVE;
+	seq = raw_read_seqcount(&vma->vm_sequence);
+	if (seq & 1)
+		return VM_FAULT_RETRY;
+
+	vmf.sequence = seq;
+	vmf.vma_flags = READ_ONCE(vma->vm_flags);
+	vmf.vma_page_prot = READ_ONCE(vma->vm_page_prot);
+
+	if (!vmf_allows_speculation(&vmf))
+		return VM_FAULT_RETRY;
+	if (address < READ_ONCE(vma->vm_start) ||
+	    address >= READ_ONCE(vma->vm_end))
+		return VM_FAULT_RETRY;
+
+	if (!arch_vma_access_permitted(vma, flags & FAULT_FLAG_WRITE,
+				       flags & FAULT_FLAG_INSTRUCTION,
+				       flags & FAULT_FLAG_REMOTE))
+		return VM_FAULT_SIGSEGV;
+
+	if (flags & FAULT_FLAG_WRITE) {
+		if (!(vmf.vma_flags & VM_WRITE))
+			return VM_FAULT_SIGSEGV;
+	} else if (!(vmf.vma_flags & (VM_READ | VM_EXEC | VM_WRITE))) {
+		return VM_FAULT_SIGSEGV;
+	}
+
+	/*
+	 * Keep interrupts disabled while following upper-level tables. This
+	 * prevents a page-table page from being freed after it was observed but
+	 * before the next level is checked.
+	 */
+	local_irq_disable();
+	pgd = pgd_offset(mm, address);
+	pgdval = READ_ONCE(*pgd);
+	if (pgd_none(pgdval) || unlikely(pgd_bad(pgdval)))
+		goto out_walk;
+
+	p4d = p4d_offset(pgd, address);
+	if (pgd_val(READ_ONCE(*pgd)) != pgd_val(pgdval))
+		goto out_walk;
+	p4dval = READ_ONCE(*p4d);
+	if (p4d_none(p4dval) || unlikely(p4d_bad(p4dval)))
+		goto out_walk;
+
+	vmf.pud = pud_offset(p4d, address);
+	if (p4d_val(READ_ONCE(*p4d)) != p4d_val(p4dval))
+		goto out_walk;
+	pudval = READ_ONCE(*vmf.pud);
+	if (pud_none(pudval) || unlikely(pud_bad(pudval)) ||
+	    pud_trans_huge(pudval) || pud_devmap(pudval))
+		goto out_walk;
+
+	vmf.pmd = pmd_offset(vmf.pud, address);
+	if (pud_val(READ_ONCE(*vmf.pud)) != pud_val(pudval))
+		goto out_walk;
+	vmf.orig_pmd = READ_ONCE(*vmf.pmd);
+	if (pmd_none(vmf.orig_pmd) || pmd_bad(vmf.orig_pmd) ||
+	    pmd_devmap(vmf.orig_pmd) || pmd_trans_huge(vmf.orig_pmd) ||
+	    is_swap_pmd(vmf.orig_pmd))
+		goto out_walk;
+
+	/* The speculative path never instantiates a PTE page table. */
+	vmf.pte = pte_offset_map(vmf.pmd, address);
+	if (pmd_val(READ_ONCE(*vmf.pmd)) != pmd_val(vmf.orig_pmd)) {
+		pte_unmap(vmf.pte);
+		vmf.pte = NULL;
+		goto out_walk;
+	}
+	vmf.orig_pte = READ_ONCE(*vmf.pte);
+	barrier();
+	if (pte_none(vmf.orig_pte)) {
+		pte_unmap(vmf.pte);
+		vmf.pte = NULL;
+	}
+	local_irq_enable();
+
+	/* Revalidate the VMA snapshot after the page-table walk. */
+	if (read_seqcount_retry(&vma->vm_sequence, seq)) {
+		if (vmf.pte)
+			pte_unmap(vmf.pte);
+		return VM_FAULT_RETRY;
+	}
+
+	mem_cgroup_enter_user_fault();
+	ret = handle_pte_fault(&vmf);
+	mem_cgroup_exit_user_fault();
+
+	/* A RETRY path must not leak an outstanding PTE mapping. */
+	if (ret == VM_FAULT_RETRY && vmf.pte)
+		pte_unmap(vmf.pte);
+
+	if (task_in_memcg_oom(current) && !(ret & VM_FAULT_OOM))
+		mem_cgroup_oom_synchronize(false);
+	return ret;
+
+out_walk:
+	local_irq_enable();
+	return VM_FAULT_RETRY;
+}
+
+vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
+				      unsigned long address,
+				      unsigned int flags,
+				      struct vm_area_struct **vma,
+				      struct pt_regs *regs)
+{
+	vm_fault_t ret;
+
+	(void)regs;
+	check_sync_rss_stat(current);
+	*vma = get_vma(mm, address);
+	if (!*vma)
+		return VM_FAULT_RETRY;
+
+	ret = ___handle_speculative_fault(mm, address, flags, *vma);
+	if (ret != VM_FAULT_RETRY) {
+		put_vma(*vma);
+		*vma = NULL;
+	}
+	return ret;
+}
+
+/*
+ * A failed speculative walk leaves a pinned VMA for the locked path to reuse.
+ * Consume that reference after checking that the VMA is still in the tree
+ * and still covers the faulting address.
+ */
+bool can_reuse_spf_vma(struct vm_area_struct *vma, unsigned long address)
+{
+	bool ret = !RB_EMPTY_NODE(&vma->vm_rb) &&
+		vma->vm_start <= address && address < vma->vm_end;
+
+	put_vma(vma);
+	return ret;
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
 
 /*
  * By the time we get here, we already hold the mm semaphore
