@@ -301,7 +301,7 @@ config SPECULATIVE_PAGE_FAULT
 	bool "Speculative page faults"
 	default y
 	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
-	depends on MMU && SMP && !NUMA
+	depends on ARCH_HAS_PTE_SPECIAL && MMU && SMP && !NUMA
 	help
 	  Handle supported user page faults without holding mmap_sem. Races with
 	  VMA or page-table changes fall back to the traditional fault path.
