@@ -5,23 +5,20 @@
 
 #include <linux/proc_fs.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/platform_device.h>
 
 #include "boost_ctrl.h"
 #include "mtk_perfmgr_internal.h"
 #include "topo_ctrl.h"
 
-#define API_READY 0
-
-static int perfmgr_probe(struct platform_device *dev)
+static int perfmgr_probe(struct platform_device *pdev)
 {
 	return 0;
 }
 
-struct platform_device perfmgr_device = {
-	.name   = "perfmgr",
-	.id        = -1,
+static struct platform_device perfmgr_device = {
+	.name = "perfmgr",
+	.id = -1,
 };
 
 static int perfmgr_suspend(struct device *dev)
@@ -36,47 +33,56 @@ static int perfmgr_resume(struct device *dev)
 {
 	return 0;
 }
-static int perfmgr_remove(struct platform_device *dev)
+
+static int perfmgr_remove(struct platform_device *pdev)
 {
-		/*TODO: workaround for k414
-		 * topo_ctrl_exit();
-		 */
-#if API_READY
-		cpu_ctrl_exit();
-#endif
 	return 0;
 }
+
 static struct platform_driver perfmgr_driver = {
-	.probe      = perfmgr_probe,
-	.remove     = perfmgr_remove,
-	.driver     = {
+	.probe = perfmgr_probe,
+	.remove = perfmgr_remove,
+	.driver = {
 		.name = "perfmgr",
-		.pm = &(const struct dev_pm_ops){
+		.pm = &(const struct dev_pm_ops) {
 			.suspend = perfmgr_suspend,
 			.resume = perfmgr_resume,
 		},
 	},
 };
 
-/*--------------------INIT------------------------*/
-
 static int __init init_perfmgr(void)
 {
-	struct proc_dir_entry *perfmgr_root = NULL;
-	int ret = 0;
+	struct proc_dir_entry *perfmgr_root;
+	int ret;
 
 	ret = platform_device_register(&perfmgr_device);
 	if (ret)
 		return ret;
+
 	ret = platform_driver_register(&perfmgr_driver);
 	if (ret)
-		return ret;
+		goto err_device;
 
 	perfmgr_root = proc_mkdir("perfmgr", NULL);
-	pr_debug("MTK_TOUCH_BOOST function init_perfmgr_touch\n");
+	if (!perfmgr_root) {
+		ret = -ENOMEM;
+		goto err_driver;
+	}
 
-	init_boostctrl(perfmgr_root);
+	ret = init_boostctrl(perfmgr_root);
+	if (ret) {
+		remove_proc_subtree("perfmgr", NULL);
+		goto err_driver;
+	}
 
+	pr_info("MediaTek perfmgr initialized\n");
 	return 0;
+
+err_driver:
+	platform_driver_unregister(&perfmgr_driver);
+err_device:
+	platform_device_unregister(&perfmgr_device);
+	return ret;
 }
 device_initcall(init_perfmgr);
