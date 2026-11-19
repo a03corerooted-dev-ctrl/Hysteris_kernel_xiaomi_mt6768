@@ -16,10 +16,7 @@ static int perfmgr_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_device perfmgr_device = {
-	.name = "perfmgr",
-	.id = -1,
-};
+static struct platform_device *perfmgr_device;
 
 static int perfmgr_suspend(struct device *dev)
 {
@@ -56,13 +53,16 @@ static int __init init_perfmgr(void)
 	struct proc_dir_entry *perfmgr_root;
 	int ret;
 
-	ret = platform_device_register(&perfmgr_device);
+	ret = platform_driver_register(&perfmgr_driver);
 	if (ret)
 		return ret;
 
-	ret = platform_driver_register(&perfmgr_driver);
-	if (ret)
-		goto err_device;
+	perfmgr_device = platform_device_register_simple("perfmgr", -1,
+						 NULL, 0);
+	if (IS_ERR(perfmgr_device)) {
+		ret = PTR_ERR(perfmgr_device);
+		goto err_driver;
+	}
 
 	perfmgr_root = proc_mkdir("perfmgr", NULL);
 	if (!perfmgr_root) {
@@ -79,10 +79,10 @@ static int __init init_perfmgr(void)
 	pr_info("MediaTek perfmgr initialized\n");
 	return 0;
 
+err_device:
+	platform_device_unregister(perfmgr_device);
 err_driver:
 	platform_driver_unregister(&perfmgr_driver);
-err_device:
-	platform_device_unregister(&perfmgr_device);
 	return ret;
 }
 device_initcall(init_perfmgr);
