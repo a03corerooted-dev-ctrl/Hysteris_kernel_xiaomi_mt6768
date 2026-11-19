@@ -752,10 +752,19 @@ static u64 calc_delta_bore_fair(u64 delta_exec, struct sched_entity *se)
 	struct load_weight bore_load;
 	unsigned int prio;
 
-	if (!entity_is_task(se) || !se->bore.burst_score)
+	if (!entity_is_task(se))
 		return calc_delta_fair(delta_exec, se);
 
 	p = task_of(se);
+
+	/*
+	 * SCHED_IDLE entities have a special idle weight (not the normal nice
+	 * weight represented by static_prio). Do not replace that policy with a
+	 * normal-priority BORE weight.
+	 */
+	if (p->policy == SCHED_IDLE || !se->bore.burst_score)
+		return calc_delta_fair(delta_exec, se);
+
 	prio = min_t(unsigned int, MAX_USER_PRIO - 1,
 		     USER_PRIO(p->static_prio) + se->bore.burst_score);
 
