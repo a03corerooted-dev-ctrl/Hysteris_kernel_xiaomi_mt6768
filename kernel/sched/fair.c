@@ -96,6 +96,87 @@ unsigned int normalized_sysctl_sched_wakeup_granularity	= 1000000UL;
 
 const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
 
+
+#ifdef CONFIG_SCHED_BORE
+unsigned int __read_mostly sched_bore = 1;
+unsigned int __read_mostly sched_burst_smoothness_long = 1;
+unsigned int __read_mostly sched_burst_smoothness_short = 0;
+unsigned int __read_mostly sched_burst_fork_atavistic = 2;
+unsigned int __read_mostly sched_burst_penalty_offset = 22;
+unsigned int __read_mostly sched_burst_penalty_scale = 1280;
+unsigned int __read_mostly sched_burst_cache_lifetime = 60000000;
+
+#define MAX_BURST_PENALTY (39U << 2)
+
+static inline u32 log2plus1_u64_u32f8(u64 value)
+{
+	u32 msb = fls64(value);
+	s32 excess_bits = (s32)msb - 9;
+	u8 fractional;
+
+	if (excess_bits >= 0)
+		fractional = value >> excess_bits;
+	else
+		fractional = value << -excess_bits;
+
+	return (msb << 8) | fractional;
+}
+
+static inline u32 calc_burst_penalty(u64 burst_time)
+{
+	u32 greed, tolerance, scaled_penalty;
+	s32 penalty;
+
+	greed = log2plus1_u64_u32f8(burst_time);
+	tolerance = READ_ONCE(sched_burst_penalty_offset) << 8;
+	penalty = (s32)greed - (s32)tolerance;
+	if (penalty <= 0)
+		return 0;
+
+	scaled_penalty = (u32)penalty *
+			 READ_ONCE(sched_burst_penalty_scale) >> 16;
+
+	return min_t(u32, MAX_BURST_PENALTY, scaled_penalty);
+}
+
+static inline void update_burst_score(struct sched_entity *se)
+{
+	se->bore.burst_score = se->bore.burst_penalty >> 2;
+}
+
+static void update_burst_penalty(struct sched_entity *se)
+{
+	se->bore.curr_burst_penalty = calc_burst_penalty(se->burst_time);
+	se->bore.burst_penalty = max(se->bore.prev_burst_penalty,
+				     se->bore.curr_burst_penalty);
+	update_burst_score(se);
+}
+
+static inline u32 binary_smooth(u32 new_value, u32 old_value)
+{
+	u32 shift;
+
+	if (new_value >= old_value) {
+		shift = READ_ONCE(sched_burst_smoothness_long);
+		return old_value + ((new_value - old_value) >> shift);
+	}
+
+	shift = READ_ONCE(sched_burst_smoothness_short);
+	return old_value - ((old_value - new_value) >> shift);
+}
+
+static void restart_burst(struct sched_entity *se)
+{
+	se->bore.burst_penalty = se->bore.prev_burst_penalty =
+		binary_smooth(se->bore.curr_burst_penalty,
+			      se->bore.prev_burst_penalty);
+	se->bore.curr_burst_penalty = 0;
+	se->burst_time = 0;
+	update_burst_score(se);
+}
+#endif /* CONFIG_SCHED_BORE */
+
+
 #ifdef CONFIG_SMP
 /*
  * For asym packing, by default the lower numbered CPU has higher priority.
@@ -657,6 +738,44 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 	return delta;
 }
 
+
+#ifdef CONFIG_SCHED_BORE
+/*
+ * Apply the BORE penalty to virtual runtime without reweighting se->load.
+ * Hysteris uses this load in PELT and MediaTek scheduling/accounting paths.
+ * Reweighting it would leak the burst score into EAS and schedtune inputs.
+ * The effective nice weight is therefore used only for vruntime progression.
+ */
+static u64 calc_delta_bore_fair(u64 delta_exec, struct sched_entity *se)
+{
+	struct task_struct *p;
+	struct load_weight bore_load;
+	unsigned int prio;
+
+	if (!entity_is_task(se))
+		return calc_delta_fair(delta_exec, se);
+
+	p = task_of(se);
+
+	/*
+	 * SCHED_IDLE entities have a special idle weight (not the normal nice
+	 * weight represented by static_prio). Do not replace that policy with a
+	 * normal-priority BORE weight.
+	 */
+	if (p->policy == SCHED_IDLE || !se->bore.burst_score)
+		return calc_delta_fair(delta_exec, se);
+
+	prio = min_t(unsigned int, MAX_USER_PRIO - 1,
+		     USER_PRIO(p->static_prio) + se->bore.burst_score);
+
+	bore_load.weight = scale_load(sched_prio_to_weight[prio]);
+	bore_load.inv_weight = sched_prio_to_wmult[prio];
+
+	return __calc_delta(delta_exec, NICE_0_LOAD, &bore_load);
+}
+#endif /* CONFIG_SCHED_BORE */
+
+
 /*
  * The idea is to set a period in which each task runs once.
  *
@@ -844,7 +963,15 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	curr->sum_exec_runtime += delta_exec;
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
 
-	curr->vruntime += calc_delta_fair(delta_exec, curr);
+#ifdef CONFIG_SCHED_BORE
+	if (entity_is_task(curr) && READ_ONCE(sched_bore)) {
+		curr->burst_time += delta_exec;
+		update_burst_penalty(curr);
+		curr->vruntime += max_t(u64, 1,
+					calc_delta_bore_fair(delta_exec, curr));
+	} else
+#endif
+		curr->vruntime += calc_delta_fair(delta_exec, curr);
 	update_min_vruntime(cfs_rq);
 
 	if (entity_is_task(curr)) {
@@ -5467,6 +5594,15 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	struct sched_entity *se = &p->se;
 	int task_sleep = flags & DEQUEUE_SLEEP;
 
+#ifdef CONFIG_SCHED_BORE
+	if (task_sleep && READ_ONCE(sched_bore)) {
+		cfs_rq = cfs_rq_of(se);
+		if (cfs_rq->curr == se)
+			update_curr(cfs_rq);
+		restart_burst(se);
+	}
+#endif
+
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
 	 * the cfs_rq utilization to select a frequency.
@@ -8154,6 +8290,21 @@ static void yield_task_fair(struct rq *rq)
 	struct task_struct *curr = rq->curr;
 	struct cfs_rq *cfs_rq = task_cfs_rq(curr);
 	struct sched_entity *se = &curr->se;
+
+#ifdef CONFIG_SCHED_BORE
+	if (READ_ONCE(sched_bore)) {
+		update_rq_clock(rq);
+		update_curr(cfs_rq);
+		restart_burst(se);
+		if (unlikely(rq->nr_running == 1))
+			return;
+
+		clear_buddies(cfs_rq, se);
+		rq_clock_skip_update(rq);
+		set_skip_buddy(se);
+		return;
+	}
+#endif
 
 	/*
 	 * Are we the only task in the tree?
@@ -11314,6 +11465,9 @@ static void task_fork_fair(struct task_struct *p)
 		update_curr(cfs_rq);
 		se->vruntime = curr->vruntime;
 	}
+#ifdef CONFIG_SCHED_BORE
+	update_burst_score(se);
+#endif
 	place_entity(cfs_rq, se, 1);
 
 	if (sysctl_sched_child_runs_first && curr && entity_before(curr, se)) {
