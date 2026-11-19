@@ -135,6 +135,7 @@
 #include <linux/uaccess.h>
 #include <linux/cgroup.h>
 #include <linux/module.h>
+#include <linux/capability.h>
 #include <linux/sched.h>
 #include <linux/ctype.h>
 #include <linux/file.h>
@@ -1007,6 +1008,7 @@ int psi_show(struct seq_file *m, struct psi_group *group, enum psi_res res)
 	return 0;
 }
 
+#ifdef CONFIG_PROC_FS
 static int psi_io_show(struct seq_file *m, void *v)
 {
 	return psi_show(m, &psi_system, PSI_IO);
@@ -1022,20 +1024,30 @@ static int psi_cpu_show(struct seq_file *m, void *v)
 	return psi_show(m, &psi_system, PSI_CPU);
 }
 
+static int psi_open(struct file *file,
+		    int (*show)(struct seq_file *, void *))
+{
+	if ((file->f_mode & FMODE_WRITE) && !capable(CAP_SYS_RESOURCE))
+		return -EPERM;
+
+	return single_open(file, show, NULL);
+}
+
 static int psi_io_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, psi_io_show, NULL);
+	return psi_open(file, psi_io_show);
 }
 
 static int psi_memory_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, psi_memory_show, NULL);
+	return psi_open(file, psi_memory_show);
 }
 
 static int psi_cpu_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, psi_cpu_show, NULL);
+	return psi_open(file, psi_cpu_show);
 }
+#endif /* CONFIG_PROC_FS */
 
 struct psi_trigger *psi_trigger_create(struct psi_group *group,
 			char *buf, size_t nbytes, enum psi_res res)
@@ -1083,9 +1095,6 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	mutex_lock(&group->trigger_lock);
 
 	if (!rcu_access_pointer(group->poll_task)) {
-		struct sched_param param = {
-			.sched_priority = 1,
-		};
 		struct task_struct *task;
 
 		task = kthread_create(psi_poll_worker, group, "psimon");
@@ -1095,9 +1104,8 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 			return ERR_CAST(task);
 		}
 		atomic_set(&group->poll_wakeup, 0);
-		rcu_assign_pointer(group->poll_task, task);
-		sched_setscheduler_nocheck(task, SCHED_FIFO, &param);
 		wake_up_process(task);
+		rcu_assign_pointer(group->poll_task, task);
 	}
 
 	list_add(&t->node, &group->triggers);
@@ -1174,6 +1182,8 @@ __poll_t psi_trigger_poll(void **trigger_ptr,
 	return ret;
 }
 
+
+#ifdef CONFIG_PROC_FS
 static ssize_t psi_write(struct file *file, const char __user *user_buf,
 			 size_t nbytes, enum psi_res res)
 {
@@ -1279,10 +1289,13 @@ static const struct file_operations psi_cpu_fops = {
 
 static int __init psi_proc_init(void)
 {
-	proc_mkdir("pressure", NULL);
-	proc_create("pressure/io", 0, NULL, &psi_io_fops);
-	proc_create("pressure/memory", 0, NULL, &psi_memory_fops);
-	proc_create("pressure/cpu", 0, NULL, &psi_cpu_fops);
+	if (psi_enable) {
+		proc_mkdir("pressure", NULL);
+		proc_create("pressure/io", 0666, NULL, &psi_io_fops);
+		proc_create("pressure/memory", 0666, NULL, &psi_memory_fops);
+		proc_create("pressure/cpu", 0666, NULL, &psi_cpu_fops);
+	}
 	return 0;
 }
 module_init(psi_proc_init);
+#endif /* CONFIG_PROC_FS */
