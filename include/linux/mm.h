@@ -31,6 +31,7 @@
 #include <linux/android_kabi.h>
 #include <linux/sizes.h>
 
+struct pt_regs;
 struct mempolicy;
 struct anon_vma;
 struct anon_vma_chain;
