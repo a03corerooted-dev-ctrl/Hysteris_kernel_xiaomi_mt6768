@@ -348,7 +348,9 @@ build can merge the optional fragment with the normal defconfig:
 
 The fragment enables CONFIG_ZRAM_MULTI_COMP, CONFIG_CRYPTO_ZSTD and the
 experimental CONFIG_ZRAM_AUTO_RECOMP worker without changing the normal device
-defconfig. This source tree initially selects lzo-rle as its primary compressor.
+defconfig. The experimental profile defaults to zstd as the secondary compressor
+for cold-page recompression. This source tree initially selects lzo-rle as its
+primary compressor.
 Android init may select a different primary compressor (for example lz4) through
 /sys/block/zramX/comp_algorithm before setting disksize. Read that attribute to
 see the active algorithm; the algorithm shown in brackets is selected. Compressor
