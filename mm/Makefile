@@ -44,6 +44,8 @@ obj-y			:= filemap.o mempool.o oom_kill.o fadvise.o \
 			   interval_tree.o list_lru.o workingset.o \
 			   debug.o $(mmu-y)
 
+obj-$(CONFIG_ACCLAIM_LWP) += acclaim.o
+
 obj-y += init-mm.o
 
 ifdef CONFIG_NO_BOOTMEM
