@@ -336,8 +336,8 @@ know it via /sys/block/zram0/bd_stat's 3rd column.
 
 With CONFIG_ZRAM_MULTI_COMP, zram can use one primary compressor and up to
 three secondary compressors. Pages are initially compressed with the primary
-algorithm. Secondary algorithms are used only when userspace explicitly
-requests recompression through the recompress sysfs attribute.
+algorithm. Secondary algorithms are used by manual recompression, and may also
+be used by the optional CONFIG_ZRAM_AUTO_RECOMP background worker.
 
 The normal MT6768 defconfig leaves this feature disabled. An experimental
 build can merge the optional fragment with the normal defconfig:
@@ -346,10 +346,13 @@ build can merge the optional fragment with the normal defconfig:
 		arch/arm64/configs/vendor/mt6768_defconfig \
 		arch/arm64/configs/vendor/mt6768_multicomp.config
 
-The fragment enables CONFIG_ZRAM_MULTI_COMP and CONFIG_CRYPTO_ZSTD without
-changing the normal device defconfig. The primary compressor defaults to
-lzo-rle. Configure secondary algorithms before setting disksize, because
-compressor selection is locked once the device is initialized:
+The fragment enables CONFIG_ZRAM_MULTI_COMP, CONFIG_CRYPTO_ZSTD and the
+experimental CONFIG_ZRAM_AUTO_RECOMP worker without changing the normal device
+defconfig. This source tree initially selects lzo-rle as its primary compressor.
+Android init may select a different primary compressor (for example lz4) through
+/sys/block/zramX/comp_algorithm before setting disksize. Read that attribute to
+see the active algorithm; the algorithm shown in brackets is selected. Compressor
+selection is locked once the device is initialized:
 
 	# Configure zstd as the first secondary compressor
 	echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm
@@ -396,6 +399,28 @@ A specific secondary algorithm can be selected for a recompression pass:
 Recompression replaces an existing object only when the result saves at
 least one zsmalloc size class. If allocation of the replacement object fails,
 the original compressed page is retained.
+
+Automatic cold-page recompression
+---------------------------------
+
+With CONFIG_ZRAM_AUTO_RECOMP, zram runs a delayed background worker after the
+device is initialized and at least one secondary compressor is configured.
+The worker marks a bounded window of eligible slots as candidates, then
+processes the previous window on a later pass. Normal zram reads and writes
+clear a slot's candidate flag, so recently accessed pages are not recompressed.
+The worker skips same-value, writeback, under-writeback and previously
+incompressible slots. It reuses the existing zram_recompress() implementation,
+which only commits a replacement when it saves at least one zsmalloc size class.
+
+The worker is bounded by CONFIG_ZRAM_AUTO_RECOMP_PAGES slots scanned and
+CONFIG_ZRAM_AUTO_RECOMP_MAX_PAGES candidate attempts per pass. Its delay is
+controlled by CONFIG_ZRAM_AUTO_RECOMP_INTERVAL. The worker uses the freezable
+system workqueue and is synchronously cancelled before zram reset. Automatic
+recompression does not replace or disable the manual recompress sysfs control.
+
+When enabled, auto_recomp_stat exposes two counters: completed worker passes
+and pages successfully moved to a secondary compressor. Both counters reset
+when the zram device is reset.
 
 The idle attribute marks slots as idle until they are accessed again. This
 manual idle marking is available independently of CONFIG_ZRAM_MEMORY_TRACKING.
