@@ -376,9 +376,10 @@ requires CONFIG_CRYPTO_LZ4.
 After configuring algorithms, initialize zram normally by setting disksize
 and activating the device.
 
-Recompression is manual. It does not start automatically and no background
-worker is created by this feature. Userspace can request recompression of
-huge pages:
+The recompress sysfs operation remains manual. The optional
+CONFIG_ZRAM_AUTO_RECOMP worker is a separate background mechanism and does not
+change the semantics of this command. Userspace can still request recompression
+of huge pages:
 
 	echo "type=huge" > /sys/block/zram0/recompress
 
