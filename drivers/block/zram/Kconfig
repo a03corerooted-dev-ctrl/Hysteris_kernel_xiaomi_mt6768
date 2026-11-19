@@ -60,6 +60,16 @@ config ZRAM_AUTO_RECOMP
 	  The worker uses bounded scans and a bounded recompression batch. Manual
 	  recompression remains available independently of this option.
 
+config ZRAM_AUTO_RECOMP_ALGORITHM
+	string "Default secondary ZRAM compression algorithm"
+	depends on ZRAM_AUTO_RECOMP
+	default "zstd"
+	help
+	  Secondary compressor used by automatic cold-page recompression.
+	  The primary compressor remains unchanged. The selected algorithm must
+	  be enabled in the kernel Crypto API. Leave empty to disable the default
+	  secondary compressor and configure one through recomp_algorithm instead.
+
 config ZRAM_AUTO_RECOMP_INTERVAL
 	int "Seconds between automatic ZRAM recompression passes"
 	depends on ZRAM_AUTO_RECOMP
