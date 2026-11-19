@@ -555,7 +555,9 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 
 	/* Conceal VM_ACCOUNT so old reservation is not undone */
 	if (vm_flags & VM_ACCOUNT && !(flags & MREMAP_DONTUNMAP)) {
-		vma->vm_flags &= ~VM_ACCOUNT;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~VM_ACCOUNT);
+		vm_write_end(vma);
 		excess = vma->vm_end - vma->vm_start - old_len;
 		if (old_addr > vma->vm_start &&
 		    old_addr + old_len < vma->vm_end)
@@ -580,7 +582,9 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 
 	if (unlikely(!err && (flags & MREMAP_DONTUNMAP))) {
 		/* We always clear VM_LOCKED[ONFAULT] on the old vma */
-		vma->vm_flags &= VM_LOCKED_CLEAR_MASK;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & VM_LOCKED_CLEAR_MASK);
+		vm_write_end(vma);
 
 		/* Because we won't unmap we don't need to touch locked_vm */
 		return new_addr;
@@ -602,9 +606,15 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 
 	/* Restore VM_ACCOUNT if one or two pieces of vma left */
 	if (excess) {
-		vma->vm_flags |= VM_ACCOUNT;
-		if (split)
-			vma->vm_next->vm_flags |= VM_ACCOUNT;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags | VM_ACCOUNT);
+		vm_write_end(vma);
+		if (split) {
+			vm_write_begin(vma->vm_next);
+			WRITE_ONCE(vma->vm_next->vm_flags,
+				   vma->vm_next->vm_flags | VM_ACCOUNT);
+			vm_write_end(vma->vm_next);
+		}
 	}
 
 	return new_addr;
