@@ -422,9 +422,12 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 
 		/*
 		 * Hide vma from rmap and truncate_pagecache before freeing
-		 * pgtables
+		 * pgtables. SPF readers may hold a VMA reference, so publish
+		 * the anon_vma lifetime change through the VMA sequence.
 		 */
+		vm_write_begin(vma);
 		unlink_anon_vmas(vma);
+		vm_write_end(vma);
 		unlink_file_vma(vma);
 
 		if (is_vm_hugetlb_page(vma)) {
