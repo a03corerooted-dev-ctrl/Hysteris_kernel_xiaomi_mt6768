@@ -798,4 +798,17 @@ config MEMFD_ASHMEM_SHIM
 
 	  Unless you are running Android, say N.
 
+config ACCLAIM_LWP
+	bool "Acclaim lightweight prediction-based background reclaim"
+	depends on MMU
+	default n
+	help
+	  Enable Acclaim's lightweight allocation predictor for background
+	  reclaim. The predictor samples successful page allocations and
+	  adjusts kswapd's scan target between the aggregate low watermark
+	  and one watermark gap above the normal target.
+
+	  This does not change direct reclaim or track foreground app UIDs.
+	  If unsure, say N.
+
 endmenu
