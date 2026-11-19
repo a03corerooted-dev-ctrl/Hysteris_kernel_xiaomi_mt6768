@@ -388,5 +388,3 @@ CONFIG_NOMOUNT=y
 # SUSFS
 CONFIG_KSU_SUSFS=y
 
-# Acclaim lightweight reclaim predictor
-CONFIG_ACCLAIM_LWP=y
