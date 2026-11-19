@@ -2801,9 +2801,23 @@ out:
 }
 
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+/*
+ * File-backed faults are opt-in, matching Android Common 5.10. A boot
+ * command-line opt-in is required because filesystem fault callbacks may
+ * acquire filesystem-specific locks even when the page is already cached.
+ */
+static bool __read_mostly allow_file_spec_access;
+
+static int __init allow_file_spec_access_setup(char *str)
+{
+	allow_file_spec_access = true;
+	return 1;
+}
+__setup("allow_file_spec_access", allow_file_spec_access_setup);
+
 bool filemap_allow_speculation(void)
 {
-	return true;
+	return READ_ONCE(allow_file_spec_access);
 }
 EXPORT_SYMBOL_GPL(filemap_allow_speculation);
 #endif
