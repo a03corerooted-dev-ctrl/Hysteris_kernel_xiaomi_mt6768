@@ -2514,6 +2514,22 @@ static int zram_add(void)
 	if (!zram)
 		return -ENOMEM;
 
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	if (CONFIG_ZRAM_AUTO_RECOMP_ALGORITHM[0]) {
+		if (zcomp_available_algorithm(CONFIG_ZRAM_AUTO_RECOMP_ALGORITHM)) {
+			zram->comp_algs[ZRAM_SECONDARY_COMP] =
+				kstrdup(CONFIG_ZRAM_AUTO_RECOMP_ALGORITHM, GFP_KERNEL);
+			if (!zram->comp_algs[ZRAM_SECONDARY_COMP]) {
+				kfree(zram);
+				return -ENOMEM;
+			}
+		} else {
+			pr_warn("zram: default recompression algorithm %s is unavailable\\n",
+				CONFIG_ZRAM_AUTO_RECOMP_ALGORITHM);
+		}
+	}
+#endif
+
 	ret = idr_alloc(&zram_index_idr, zram, 0, 0, GFP_KERNEL);
 	if (ret < 0)
 		goto out_free_dev;
@@ -2599,6 +2615,7 @@ out_free_queue:
 out_free_idr:
 	idr_remove(&zram_index_idr, device_id);
 out_free_dev:
+	zram_free_comp_algs(zram);
 	kfree(zram);
 	return ret;
 }
