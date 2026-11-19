@@ -398,12 +398,13 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 
 static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 			   unsigned int mm_flags, unsigned long vm_flags,
-			   struct task_struct *tsk)
+			   struct task_struct *tsk,
+			   struct vm_area_struct *vma)
 {
-	struct vm_area_struct *vma;
 	vm_fault_t fault;
 
-	vma = find_vma(mm, addr);
+	if (!vma)
+		vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
 	if (unlikely(!vma))
 		goto out;
@@ -444,7 +445,10 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	struct siginfo si;
+	struct vm_area_struct *vma = NULL;
 	vm_fault_t fault, major = 0;
+	bool mmap_locked = false;
+	bool speculative = false;
 	unsigned long vm_flags = VM_READ | VM_WRITE | VM_EXEC;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
@@ -488,6 +492,18 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, addr);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	/*
+	 * Try the lockless path first. Unsupported faults return RETRY and keep
+	 * a VMA reference for safe reuse once mmap_sem has been acquired.
+	 */
+	fault = handle_speculative_fault(mm, addr, mm_flags, &vma, regs);
+	if (fault != VM_FAULT_RETRY) {
+		speculative = true;
+		goto fault_done;
+	}
+#endif
+
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
 	 * validly references user space from well defined areas of the code,
@@ -498,7 +514,9 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 			goto no_context;
 retry:
 		mmap_read_lock(mm);
+		mmap_locked = true;
 	} else {
+		mmap_locked = true;
 		/*
 		 * The above down_read_trylock() might have succeeded in which
 		 * case, we'll have missed the might_sleep() from down_read().
@@ -510,7 +528,16 @@ retry:
 #endif
 	}
 
-	fault = __do_page_fault(mm, addr, mm_flags, vm_flags, tsk);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	if (vma) {
+		if (!can_reuse_spf_vma(vma, addr))
+			vma = NULL;
+	}
+#endif
+	fault = __do_page_fault(mm, addr, mm_flags, vm_flags, tsk, vma);
+	/* The locked fault path may drop mmap_sem and invalidate this pointer. */
+	vma = NULL;
+fault_done:
 	major |= fault & VM_FAULT_MAJOR;
 
 	/* Quick path to respond to signals */
@@ -523,10 +550,12 @@ retry:
 	if (fault & VM_FAULT_RETRY) {
 		if (mm_flags & FAULT_FLAG_ALLOW_RETRY) {
 			mm_flags |= FAULT_FLAG_TRIED;
+			mmap_locked = false;
 			goto retry;
 		}
 	}
-	mmap_read_unlock(mm);
+	if (mmap_locked)
+		mmap_read_unlock(mm);
 
 	/*
 	 * Handle the "normal" (no error) case first.
@@ -603,6 +632,12 @@ retry:
 	return 0;
 
 no_context:
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	if (vma)
+		put_vma(vma);
+#endif
+	if (mmap_locked)
+		mmap_read_unlock(mm);
 	__do_kernel_fault(addr, esr, regs);
 	return 0;
 }
