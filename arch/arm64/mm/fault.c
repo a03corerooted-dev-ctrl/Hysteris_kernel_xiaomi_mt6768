@@ -448,7 +448,6 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	struct vm_area_struct *vma = NULL;
 	vm_fault_t fault, major = 0;
 	bool mmap_locked = false;
-	bool speculative = false;
 	unsigned long vm_flags = VM_READ | VM_WRITE | VM_EXEC;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
@@ -499,7 +498,6 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 */
 	fault = handle_speculative_fault(mm, addr, mm_flags, &vma, regs);
 	if (fault != VM_FAULT_RETRY) {
-		speculative = true;
 		goto fault_done;
 	}
 #endif
