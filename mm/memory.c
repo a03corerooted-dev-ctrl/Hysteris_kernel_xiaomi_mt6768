@@ -3101,6 +3101,17 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	if (!page) {
 		struct swap_info_struct *si = swp_swap_info(entry);
 
+		/*
+		 * Both synchronous swap reads and swapin_readahead can block
+		 * or start IO. Speculative swap faults only consume an
+		 * already resident swapcache page.
+		 */
+		if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+			delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
+			ret = VM_FAULT_RETRY;
+			goto out;
+		}
+
 		if (si->flags & SWP_SYNCHRONOUS_IO &&
 				__swap_count(si, entry) == 1) {
 			/* skip swapcache */
@@ -3113,14 +3124,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 				lru_cache_add_anon(page);
 				swap_readpage(page, true);
 			}
-		} else if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
-			/*
-			 * Readahead can sleep and depends on the VMA range.
-			 * Retry with mmap_sem when the page is not in swapcache.
-			 */
-			delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
-			ret = VM_FAULT_RETRY;
-			goto out;
 		} else {
 			page = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE,
 						vmf);
@@ -3157,7 +3160,10 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		goto out_release;
 	}
 
-	locked = lock_page_or_retry(page, vma->vm_mm, vmf->flags);
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE)
+		locked = trylock_page(page);
+	else
+		locked = lock_page_or_retry(page, vma->vm_mm, vmf->flags);
 
 	delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 	if (!locked) {
