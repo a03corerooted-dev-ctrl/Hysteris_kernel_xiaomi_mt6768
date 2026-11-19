@@ -506,7 +506,11 @@ static void print_rq(struct seq_file *m, struct rq *rq, int rq_cpu)
 	SEQ_printf(m, "\n");
 	SEQ_printf(m, "runnable tasks:\n");
 	SEQ_printf(m, " S           task   PID         tree-key  switches  prio"
+#ifdef CONFIG_SCHED_BORE
+		   "     wait-time             sum-exec        sum-sleep burst\n");
+#else
 		   "     wait-time             sum-exec        sum-sleep\n");
+#endif
 	SEQ_printf(m, "-------------------------------------------------------"
 		   "----------------------------------------------------\n");
 
