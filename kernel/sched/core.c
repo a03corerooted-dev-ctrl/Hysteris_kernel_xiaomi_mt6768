@@ -2865,7 +2865,9 @@ static u32 count_child_tasks(struct task_struct *p)
 
 static inline bool task_is_inheritable(struct task_struct *p)
 {
-	return p->sched_class == &fair_sched_class;
+	/* A concurrent fork may already be linked but not inherited yet. */
+	return p->sched_class == &fair_sched_class &&
+	       READ_ONCE(p->state) != TASK_NEW;
 }
 
 static inline bool child_burst_cache_expired(struct task_struct *p, u64 now)
