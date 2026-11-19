@@ -159,3 +159,12 @@ Description:
 		objects smaller than the requested compressed size. An optional
 		"algo=<name>" parameter limits the pass to the selected secondary
 		algorithm. Recompression is not scheduled automatically.
+
+What: /sys/block/zram<id>/auto_recomp_stat
+Date: November 2026
+Description:
+	Read-only counters available when CONFIG_ZRAM_AUTO_RECOMP is enabled.
+	The first value is the number of completed automatic recompression passes.
+	The second value is the number of pages successfully moved to a secondary
+	compression algorithm. Both counters are reset when the zram device is reset.
+
