@@ -143,7 +143,8 @@ static int perfmgr_glb_info_proc_show(struct seq_file *m, void *v)
 	int cluster;
 	struct cpumask online_cpus;
 
-	seq_printf(m, "perfmgr_clusters: %d\n", topo_cluster_num);
+	/* Preserve the legacy keys consumed by existing userspace. */
+	seq_printf(m, "perfmgr_clusters : %d\n", topo_cluster_num);
 	if (!topo_cluster_info || !calc_cpu_cap || !calc_cpu_num)
 		return 0;
 
@@ -151,17 +152,16 @@ static int perfmgr_glb_info_proc_show(struct seq_file *m, void *v)
 		cpumask_and(&online_cpus,
 			    &topo_cluster_info[cluster].cpus,
 			    cpu_online_mask);
-		seq_printf(m,
-			   "cluster%d_capacity: %d\n"
-			   "cluster%d_possible_cpus: %d\n"
-			   "cluster%d_online_cpus: %d\n",
-			   cluster, calc_cpu_cap[cluster],
-			   cluster, calc_cpu_num[cluster],
+		seq_printf(m, "calc_cpu_cap[%d]:%d\n",
+			   cluster, calc_cpu_cap[cluster]);
+		seq_printf(m, "calc_cpu_num[%d]:%d\n",
+			   cluster, calc_cpu_num[cluster]);
+		seq_printf(m, "online_cpu_num[%d]:%d\n",
 			   cluster, cpumask_weight(&online_cpus));
 	}
 
-	seq_printf(m, "small_cluster: %d\n", s_clstr_core);
-	seq_printf(m, "big_cluster: %d\n", b_clstr_core);
+	seq_printf(m, "s_clstr_core : %d\n", s_clstr_core);
+	seq_printf(m, "b_clstr_core : %d\n", b_clstr_core);
 	return 0;
 }
 
@@ -184,6 +184,22 @@ static int perfmgr_nr_clusters_proc_show(struct seq_file *m, void *v)
 }
 
 static int perfmgr_cpus_per_cluster_proc_show(struct seq_file *m, void *v)
+{
+	int cluster;
+
+	if (!topo_cluster_info)
+		return -ENODEV;
+
+	/* Keep the original hexadecimal format for legacy readers. */
+	for (cluster = 0; cluster < topo_cluster_num; cluster++)
+		seq_printf(m, "cluster%d: %0lx\n", cluster,
+			   *cpumask_bits(&topo_cluster_info[cluster].cpus));
+
+	return 0;
+}
+
+static int perfmgr_cpus_per_cluster_list_proc_show(struct seq_file *m,
+						   void *v)
 {
 	int cluster;
 
@@ -222,6 +238,7 @@ PROC_FOPS_RO(glb_info);
 PROC_FOPS_RO(is_big_little);
 PROC_FOPS_RO(nr_clusters);
 PROC_FOPS_RO(cpus_per_cluster);
+PROC_FOPS_RO(cpus_per_cluster_list);
 PROC_FOPS_RO(online_cpus_per_cluster);
 
 int topo_ctrl_init(struct proc_dir_entry *parent)
@@ -241,6 +258,7 @@ int topo_ctrl_init(struct proc_dir_entry *parent)
 		PROC_ENTRY(is_big_little),
 		PROC_ENTRY(nr_clusters),
 		PROC_ENTRY(cpus_per_cluster),
+		PROC_ENTRY(cpus_per_cluster_list),
 		PROC_ENTRY(online_cpus_per_cluster),
 	};
 
