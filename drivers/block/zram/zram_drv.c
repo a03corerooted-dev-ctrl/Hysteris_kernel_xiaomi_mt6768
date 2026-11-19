@@ -33,7 +33,9 @@
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
+#include <linux/jiffies.h>
 #include <linux/sched.h>
+#include <linux/workqueue.h>
 
 #include "zram_drv.h"
 
@@ -898,6 +900,9 @@ static void zram_debugfs_destroy(void)
 static void zram_accessed(struct zram *zram, u32 index)
 {
 	zram_clear_flag(zram, index, ZRAM_IDLE);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	zram_clear_flag(zram, index, ZRAM_RECOMP_CANDIDATE);
+#endif
 	zram->table[index].ac_time = ktime_get_boottime();
 }
 
@@ -997,6 +1002,9 @@ static void zram_debugfs_destroy(void) {};
 static void zram_accessed(struct zram *zram, u32 index)
 {
 	zram_clear_flag(zram, index, ZRAM_IDLE);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	zram_clear_flag(zram, index, ZRAM_RECOMP_CANDIDATE);
+#endif
 };
 static void zram_debugfs_register(struct zram *zram) {};
 static void zram_debugfs_unregister(struct zram *zram) {};
@@ -1231,6 +1239,23 @@ static ssize_t mm_stat_show(struct device *dev,
 	return ret;
 }
 
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+static ssize_t auto_recomp_stat_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct zram *zram = dev_to_zram(dev);
+	ssize_t ret;
+
+	down_read(&zram->init_lock);
+	ret = scnprintf(buf, PAGE_SIZE, "%llu %llu\n",
+			(u64)atomic64_read(&zram->stats.auto_recomp_scans),
+			(u64)atomic64_read(&zram->stats.auto_recomp_pages));
+	up_read(&zram->init_lock);
+
+	return ret;
+}
+#endif
+
 #ifdef CONFIG_ZRAM_WRITEBACK
 #define FOUR_K(x) ((x) * (1 << (PAGE_SHIFT - 12)))
 static ssize_t bd_stat_show(struct device *dev,
@@ -1275,6 +1300,9 @@ static DEVICE_ATTR_RO(mm_stat);
 static DEVICE_ATTR_RO(bd_stat);
 #endif
 static DEVICE_ATTR_RO(debug_stat);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+static DEVICE_ATTR_RO(auto_recomp_stat);
+#endif
 
 static void zram_meta_free(struct zram *zram, u64 disksize)
 {
@@ -1323,6 +1351,9 @@ static void zram_free_page(struct zram *zram, size_t index)
 #endif
 	if (zram_test_flag(zram, index, ZRAM_IDLE))
 		zram_clear_flag(zram, index, ZRAM_IDLE);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	zram_clear_flag(zram, index, ZRAM_RECOMP_CANDIDATE);
+#endif
 
 	if (zram_test_flag(zram, index, ZRAM_HUGE)) {
 		zram_clear_flag(zram, index, ZRAM_HUGE);
@@ -1871,6 +1902,140 @@ free_args:
 }
 #endif /* CONFIG_ZRAM_MULTI_COMP */
 
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+/*
+ * Automatic recompression only considers slots that have remained untouched
+ * across two separate scans.  A read or write clears the candidate bit.
+ */
+static bool zram_has_higher_recomp_comp(struct zram *zram, u32 priority)
+{
+	for (priority++; priority < ZRAM_MAX_COMPS; priority++) {
+		if (zram->comps[priority])
+			return true;
+	}
+
+	return false;
+}
+
+static void zram_auto_recompress_work(struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct zram *zram = container_of(dwork, struct zram, recomp_work);
+	struct page *page = NULL;
+	unsigned long nr_pages, batch, index, i;
+	unsigned int attempts = 0;
+
+	/*
+	 * Hold init_lock for the complete pass and re-arm the work before
+	 * dropping it.  zram_reset_device() synchronously cancels this work
+	 * before taking init_lock for writing.
+	 */
+	down_read(&zram->init_lock);
+
+	if (!init_done(zram) ||
+	    !zram_has_higher_recomp_comp(zram, ZRAM_PRIMARY_COMP))
+		goto out;
+
+	nr_pages = zram->disksize >> PAGE_SHIFT;
+	if (!nr_pages)
+		goto out;
+
+	batch = min_t(unsigned long, CONFIG_ZRAM_AUTO_RECOMP_PAGES,
+		      nr_pages);
+
+	/*
+	 * The first pass only marks candidates.  Later passes process the
+	 * previous window while marking the next one.
+	 */
+	if (zram->recomp_primed) {
+		page = alloc_page(GFP_KERNEL);
+		if (page) {
+			index = zram->recomp_cursor;
+			if (index >= nr_pages)
+				index = 0;
+
+			for (i = 0; i < batch; i++) {
+				zram_slot_lock(zram, index);
+				if (zram_test_flag(zram, index,
+						   ZRAM_RECOMP_CANDIDATE)) {
+					u32 old_priority;
+
+					zram_clear_flag(zram, index,
+							ZRAM_RECOMP_CANDIDATE);
+					if (zram_allocated(zram, index) &&
+					    !zram_test_flag(zram, index, ZRAM_WB) &&
+					    !zram_test_flag(zram, index, ZRAM_UNDER_WB) &&
+					    !zram_test_flag(zram, index, ZRAM_SAME) &&
+					    !zram_test_flag(zram, index,
+							    ZRAM_INCOMPRESSIBLE)) {
+						old_priority =
+							zram_get_priority(zram, index);
+						if (zram_has_higher_recomp_comp(
+								zram, old_priority)) {
+							attempts++;
+							if (!zram_recompress(zram, index,
+									     page, 0,
+									     ZRAM_SECONDARY_COMP,
+									     ZRAM_MAX_COMPS) &&
+							    zram_get_priority(zram, index) >
+								old_priority)
+								atomic64_inc(&zram->stats.auto_recomp_pages);
+						}
+					}
+				}
+				zram_slot_unlock(zram, index);
+
+				index++;
+				if (index >= nr_pages)
+					index = 0;
+				if (attempts >= CONFIG_ZRAM_AUTO_RECOMP_MAX_PAGES)
+					break;
+				cond_resched();
+			}
+			zram->recomp_cursor = index;
+		}
+	}
+
+	index = zram->mark_cursor;
+	if (index >= nr_pages)
+		index = 0;
+
+	for (i = 0; i < batch; i++) {
+		zram_slot_lock(zram, index);
+		if (zram_allocated(zram, index) &&
+		    !zram_test_flag(zram, index, ZRAM_WB) &&
+		    !zram_test_flag(zram, index, ZRAM_UNDER_WB) &&
+		    !zram_test_flag(zram, index, ZRAM_SAME) &&
+		    !zram_test_flag(zram, index, ZRAM_INCOMPRESSIBLE) &&
+		    !zram_test_flag(zram, index, ZRAM_RECOMP_CANDIDATE) &&
+		    zram_has_higher_recomp_comp(zram,
+						zram_get_priority(zram, index)))
+			zram_set_flag(zram, index, ZRAM_RECOMP_CANDIDATE);
+		zram_slot_unlock(zram, index);
+
+		index++;
+		if (index >= nr_pages)
+			index = 0;
+		cond_resched();
+	}
+
+	zram->mark_cursor = index;
+	zram->recomp_primed = true;
+	atomic64_inc(&zram->stats.auto_recomp_scans);
+
+out:
+	if (page)
+		__free_page(page);
+
+	if (init_done(zram) &&
+	    zram_has_higher_recomp_comp(zram, ZRAM_PRIMARY_COMP))
+		queue_delayed_work(system_freezable_wq, &zram->recomp_work,
+			msecs_to_jiffies(CONFIG_ZRAM_AUTO_RECOMP_INTERVAL * 1000));
+
+	up_read(&zram->init_lock);
+}
+#endif /* CONFIG_ZRAM_AUTO_RECOMP */
+
 /*
  * zram_bio_discard - handler on discard request
  * @index: physical block index in PAGE_SIZE units
@@ -2115,6 +2280,10 @@ static void zram_reset_device(struct zram *zram)
 {
 	u64 disksize;
 
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	cancel_delayed_work_sync(&zram->recomp_work);
+#endif
+	/* Stop background recompression before tearing down the zram pool. */
 	down_write(&zram->init_lock);
 
 	zram->limit_pages = 0;
@@ -2180,6 +2349,14 @@ static ssize_t disksize_store(struct device *dev,
 	zram->disksize = disksize;
 	set_capacity(zram->disk, zram->disksize >> SECTOR_SHIFT);
 	revalidate_disk(zram->disk);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	zram->recomp_cursor = 0;
+	zram->mark_cursor = 0;
+	zram->recomp_primed = false;
+	if (zram_has_higher_recomp_comp(zram, ZRAM_PRIMARY_COMP))
+		queue_delayed_work(system_freezable_wq, &zram->recomp_work,
+			msecs_to_jiffies(CONFIG_ZRAM_AUTO_RECOMP_INTERVAL * 1000));
+#endif
 	up_write(&zram->init_lock);
 	return len;
 
@@ -2304,6 +2481,9 @@ static struct attribute *zram_disk_attrs[] = {
 	&dev_attr_bd_stat.attr,
 #endif
 	&dev_attr_debug_stat.attr,
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	&dev_attr_auto_recomp_stat.attr,
+#endif
 	NULL,
 };
 
@@ -2336,6 +2516,9 @@ static int zram_add(void)
 	device_id = ret;
 
 	init_rwsem(&zram->init_lock);
+#ifdef CONFIG_ZRAM_AUTO_RECOMP
+	INIT_DELAYED_WORK(&zram->recomp_work, zram_auto_recompress_work);
+#endif
 #ifdef CONFIG_ZRAM_WRITEBACK
 	spin_lock_init(&zram->wb_limit_lock);
 #endif
