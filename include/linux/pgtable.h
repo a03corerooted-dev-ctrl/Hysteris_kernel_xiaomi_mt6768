@@ -5,12 +5,14 @@
 #include <linux/pfn.h>
 #include <asm/pgtable.h>
 
+#ifndef __ASSEMBLY__
 #ifndef arch_has_hw_pte_young
 static inline bool arch_has_hw_pte_young(void)
 {
 	return false;
 }
 #endif
+#endif /* !__ASSEMBLY__ */
 
 #ifndef __ASSEMBLY__
 #ifdef CONFIG_MMU
