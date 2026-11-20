@@ -755,9 +755,9 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	 * never block on it since we just check for its value and never wait
 	 * for it to move, see vma_has_changed() and handle_speculative_fault().
 	 */
-	vm_raw_write_begin(vma);
+	vm_write_begin(vma);
 	if (next)
-		vm_raw_write_begin(next);
+		vm_write_begin(next);
 
 	if (next && !insert) {
 		struct vm_area_struct *exporter = NULL, *importer = NULL;
@@ -841,8 +841,8 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 			error = anon_vma_clone(importer, exporter);
 			if (error) {
 				if (next && next != vma)
-					vm_raw_write_end(next);
-				vm_raw_write_end(vma);
+					vm_write_end(next);
+				vm_write_end(vma);
 				return error;
 			}
 		}
@@ -971,7 +971,7 @@ again:
 		if (next->anon_vma)
 			anon_vma_merge(vma, next);
 		mm->map_count--;
-		vm_raw_write_end(next);
+		vm_write_end(next);
 		put_vma(next);
 		/*
 		 * In mprotect's case 6 (see comments on vma_merge),
@@ -987,7 +987,7 @@ again:
 			 */
 			next = vma->vm_next;
 			if (next)
-				vm_raw_write_begin(next);
+				vm_write_begin(next);
 		} else {
 			/*
 			 * For the scope of the comment "next" and
@@ -1035,9 +1035,9 @@ again:
 		uprobe_mmap(insert);
 
 	if (next && next != vma)
-		vm_raw_write_end(next);
+		vm_write_end(next);
 	if (!keep_locked)
-		vm_raw_write_end(vma);
+		vm_write_end(vma);
 
 	validate_mm(mm);
 
@@ -2499,7 +2499,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 				 * against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
-				vm_raw_write_begin(vma);
+				vm_write_begin(vma);
 				if (vma->vm_flags & VM_LOCKED)
 					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
@@ -2510,7 +2510,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 					vma_gap_update(vma->vm_next);
 				else
 					mm->highest_vm_end = vm_end_gap(vma);
-				vm_raw_write_end(vma);
+				vm_write_end(vma);
 				spin_unlock(&mm->page_table_lock);
 
 				perf_event_mmap(vma);
@@ -2581,7 +2581,7 @@ int expand_downwards(struct vm_area_struct *vma,
 				 * against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
-				vm_raw_write_begin(vma);
+				vm_write_begin(vma);
 				if (vma->vm_flags & VM_LOCKED)
 					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
@@ -2590,7 +2590,7 @@ int expand_downwards(struct vm_area_struct *vma,
 				WRITE_ONCE(vma->vm_pgoff, vma->vm_pgoff - grow);
 				anon_vma_interval_tree_post_update_vma(vma);
 				vma_gap_update(vma);
-				vm_raw_write_end(vma);
+				vm_write_end(vma);
 				spin_unlock(&mm->page_table_lock);
 
 				perf_event_mmap(vma);
@@ -3400,7 +3400,7 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 		 * that we protect it right now, and let the caller unprotect
 		 * it once the move is done.
 		 */
-		vm_raw_write_begin(new_vma);
+		vm_write_begin(new_vma);
 		vma_link(mm, new_vma, prev, rb_link, rb_parent);
 		*need_rmap_locks = false;
 	}
