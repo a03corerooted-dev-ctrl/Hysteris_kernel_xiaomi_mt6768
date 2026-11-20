@@ -492,9 +492,11 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 * concurrently modified VMA is returned for validation after the
 	 * regular mmap read lock has been acquired.
 	 */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	fault = handle_speculative_fault(mm, addr, mm_flags, &vma);
 	if (fault != VM_FAULT_RETRY)
 		goto done;
+#endif
 
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
