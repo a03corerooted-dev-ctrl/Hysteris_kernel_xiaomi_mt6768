@@ -1,0 +1,92 @@
+name: SPF 4.19 disabled build
+
+on:
+  push:
+    branches:
+      - test/spf-419-ci-disabled
+    paths:
+      - '.github/workflows/spf-419-build.yml'
+      - 'arch/arm64/**'
+      - 'include/**'
+      - 'kernel/**'
+      - 'mm/**'
+      - 'fs/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - 'Kbuild'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spf-419-n-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64-mt6768:
+    name: MT6768 ARM64 / SPF=n
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    env:
+      ARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+      CC: clang-14
+      LD: ld.lld-14
+      HOSTCC: clang-14
+      HOSTLD: ld.lld-14
+      SPF_EXPECTED: "n"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Install toolchain and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential clang-14 flex gcc-aarch64-linux-gnu libelf-dev libssl-dev lld-14 llvm-14 python3
+
+      - name: Configure MT6768 defconfig
+        run: |
+          make O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" k68v1_64_k419_defconfig
+          if [ "$SPF_EXPECTED" = "y" ]; then
+            scripts/config --file out/.config --enable SPECULATIVE_PAGE_FAULT
+          else
+            scripts/config --file out/.config --disable SPECULATIVE_PAGE_FAULT
+          fi
+          make O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" olddefconfig
+          grep -E '^(CONFIG_SPECULATIVE_PAGE_FAULT=y|# CONFIG_SPECULATIVE_PAGE_FAULT is not set)$' out/.config
+          if [ "$SPF_EXPECTED" = "y" ]; then
+            grep -q '^CONFIG_SPECULATIVE_PAGE_FAULT=y$' out/.config
+          else
+            grep -q '^# CONFIG_SPECULATIVE_PAGE_FAULT is not set$' out/.config
+          fi
+
+      - name: Build ARM64 Image.gz
+        run: |
+          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
+
+      - name: Record build configuration
+        if: always()
+        run: |
+          {
+            echo "branch=${GITHUB_REF_NAME}"
+            echo "commit=${GITHUB_SHA}"
+            echo "spf_expected=${SPF_EXPECTED}"
+            echo "compiler=$($CC --version | head -n 1)"
+            echo "linker=$($LD --version | head -n 1)"
+          } > out/build-metadata.txt
+          test ! -f out/.config || cp out/.config out/kernel.config
+
+      - name: Upload config and build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
+          if-no-files-found: ignore
+          path: |
+            out/kernel.config
+            out/build-metadata.txt
+            out/arch/arm64/boot/Image.gz
