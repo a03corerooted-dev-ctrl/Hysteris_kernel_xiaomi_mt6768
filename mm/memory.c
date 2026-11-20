@@ -238,8 +238,9 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 	 * Synchronize with it before the page-table page (and its split
 	 * lock, when present) can be detached and reclaimed.
 	 */
-	spinlock_t *ptl = pmd_lock(tlb->mm, pmd);
+	spinlock_t *ptl = pte_lockptr(tlb->mm, pmd);
 
+	spin_lock(ptl);
 	spin_unlock(ptl);
 #endif
 	pmd_clear(pmd);
