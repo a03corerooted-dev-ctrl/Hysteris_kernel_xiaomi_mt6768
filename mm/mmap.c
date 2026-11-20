@@ -74,7 +74,7 @@ core_param(ignore_rlimit_data, ignore_rlimit_data, bool, 0644);
 
 static void unmap_region(struct mm_struct *mm,
 		struct vm_area_struct *vma, struct vm_area_struct *prev,
-		unsigned long start, unsigned long end);
+		unsigned long start, unsigned long end, bool vma_seq_held);
 
 /* description of effects of mapping type and prot in current implementation.
  * this is due to the limited x86 page protection hardware.  The expected
@@ -1931,7 +1931,7 @@ unmap_and_free_vma:
 	fput(file);
 
 	/* Undo any partial mapping done by a device driver. */
-	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
+	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end, false);
 	if (vm_flags & VM_SHARED)
 		mapping_unmap_writable(file->f_mapping);
 allow_write_and_free_vma:
@@ -2712,7 +2712,7 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
  */
 static void unmap_region(struct mm_struct *mm,
 		struct vm_area_struct *vma, struct vm_area_struct *prev,
-		unsigned long start, unsigned long end)
+		unsigned long start, unsigned long end, bool vma_seq_held)
 {
 	struct vm_area_struct *next = prev ? prev->vm_next : mm->mmap;
 	struct mmu_gather tlb;
@@ -2743,13 +2743,11 @@ static void unmap_region(struct mm_struct *mm,
 	tlb_finish_mmu(&tlb, start, end);
 
 	/*
-	 * munmap keeps each detached VMA unavailable to speculative
-	 * faults until its PTEs and page-table pages have been removed
-	 * and the TLB gather has completed. Unpublished VMAs on the
-	 * mmap error path have no outstanding sequence writer.
+	 * Munmap owns the odd VMA sequences until the PTE/page-table
+	 * teardown and final TLB gather are complete.
 	 */
-	for (cur_vma = vma; cur_vma; cur_vma = cur_vma->vm_next)
-		if (vm_write_is_active(cur_vma))
+	if (vma_seq_held)
+		for (cur_vma = vma; cur_vma; cur_vma = cur_vma->vm_next)
 			vm_write_end(cur_vma);
 }
 
@@ -2966,7 +2964,7 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	 * Remove the vma's, and unmap the actual pages
 	 */
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
-	unmap_region(mm, vma, prev, start, end);
+	unmap_region(mm, vma, prev, start, end, true);
 
 	arch_unmap(mm, vma, start, end);
 
