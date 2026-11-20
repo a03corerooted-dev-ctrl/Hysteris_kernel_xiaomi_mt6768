@@ -647,8 +647,10 @@ static void userfaultfd_event_wait_completion(struct userfaultfd_ctx *ctx,
 		VM_WARN_ON(!mmget_still_valid(mm));
 		for (vma = mm->mmap; vma; vma = vma->vm_next)
 			if (vma->vm_userfaultfd_ctx.ctx == release_new_ctx) {
+				vm_write_begin(vma);
 				vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-				vma->vm_flags &= ~__VM_UFFD_FLAGS;
+				WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+				vm_write_end(vma);
 			}
 		mmap_write_unlock(mm);
 
@@ -679,8 +681,10 @@ int dup_userfaultfd(struct vm_area_struct *vma, struct list_head *fcs)
 
 	octx = vma->vm_userfaultfd_ctx.ctx;
 	if (!octx || !(octx->features & UFFD_FEATURE_EVENT_FORK)) {
+		vm_write_begin(vma);
 		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-		vma->vm_flags &= ~__VM_UFFD_FLAGS;
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+		vm_write_end(vma);
 		return 0;
 	}
 
@@ -716,7 +720,9 @@ int dup_userfaultfd(struct vm_area_struct *vma, struct list_head *fcs)
 		list_add_tail(&fctx->list, fcs);
 	}
 
+	vm_write_begin(vma);
 	vma->vm_userfaultfd_ctx.ctx = ctx;
+	vm_write_end(vma);
 	return 0;
 }
 
@@ -760,8 +766,10 @@ void mremap_userfaultfd_prep(struct vm_area_struct *vma,
 		WRITE_ONCE(ctx->mmap_changing, true);
 	} else {
 		/* Drop uffd context if remap feature not enabled */
+		vm_write_begin(vma);
 		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
-		vma->vm_flags &= ~__VM_UFFD_FLAGS;
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags & ~__VM_UFFD_FLAGS);
+		vm_write_end(vma);
 	}
 }
 
@@ -922,8 +930,10 @@ static int userfaultfd_release(struct inode *inode, struct file *file)
 			else
 				prev = vma;
 		}
-		vma->vm_flags = new_flags;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, new_flags);
 		vma->vm_userfaultfd_ctx = NULL_VM_UFFD_CTX;
+		vm_write_end(vma);
 	}
 	mmap_write_unlock(mm);
 	mmput(mm);
@@ -1493,8 +1503,10 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		 * the next vma was merged into the current one and
 		 * the current one has not been updated yet.
 		 */
-		vma->vm_flags = new_flags;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, new_flags);
 		vma->vm_userfaultfd_ctx.ctx = ctx;
+		vm_write_end(vma);
 
 		if (is_vm_hugetlb_page(vma) && uffd_disable_huge_pmd_share(vma))
 			hugetlb_unshare_all_pmds(vma);
