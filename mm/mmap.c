@@ -3327,7 +3327,10 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 		vma->vm_pgoff = vma->vm_start >> PAGE_SHIFT;
 	}
 
+	/* Publish the VMA only while its speculative sequence is unstable. */
+	vm_write_begin(vma);
 	vma_link(mm, vma, prev, rb_link, rb_parent);
+	vm_write_end(vma);
 	return 0;
 }
 
