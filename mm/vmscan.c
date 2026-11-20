@@ -3888,7 +3888,7 @@ static void walk_mm(struct lruvec *lruvec, struct mm_struct *mm, struct lru_gen_
 
 			err = walk_page_range(start, end, &args);
 
-			up_read(&mm->mmap_sem);
+			up_read(&mm->mmap_lock);
 
 			if (walk->batched) {
 				spin_lock_irq(&pgdat->lru_lock);
