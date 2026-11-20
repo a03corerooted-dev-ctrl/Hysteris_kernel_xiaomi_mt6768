@@ -734,11 +734,14 @@ static void madvise_free_page_range(struct mmu_gather *tlb,
 		.private = tlb,
 	};
 
-	vm_write_begin(vma);
+	/*
+	 * MADV_FREE runs under mmap_read_lock, so concurrent callers may
+	 * walk the same VMA. The PTE locks serialize page-table changes;
+	 * do not use the VMA seqcount as a writer lock here.
+	 */
 	tlb_start_vma(tlb, vma);
 	walk_page_range(addr, end, &free_walk);
 	tlb_end_vma(tlb, vma);
-	vm_write_end(vma);
 }
 
 static int madvise_free_single_vma(struct vm_area_struct *vma,
