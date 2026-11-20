@@ -2235,6 +2235,16 @@ static bool pte_map_lock(struct vm_fault *vmf)
 	 */
 	ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 	pte = pte_offset_map(vmf->pmd, vmf->address);
+	/*
+	 * The PMD can be replaced after the first check but before the
+	 * PTE pointer is derived. Do not inspect or lock a PTE table
+	 * through a stale PMD.
+	 */
+	if (unlikely(pmd_val(READ_ONCE(*vmf->pmd)) !=
+		     pmd_val(vmf->orig_pmd))) {
+		pte_unmap(pte);
+		goto out;
+	}
 	if (unlikely(!spin_trylock(ptl))) {
 		pte_unmap(pte);
 		goto out;
