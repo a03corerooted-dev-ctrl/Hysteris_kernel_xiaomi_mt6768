@@ -4141,16 +4141,11 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 
+	/* Never dereference a potentially unstable PMD in the speculative path. */
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE)
+		goto skip_pmd_checks;
+
 	if (unlikely(pmd_none(*vmf->pmd))) {
-		/*
-		 * In the case of the speculative page fault handler we abort
-		 * the speculative path immediately as the pmd is probably
-		 * in the way to be converted in a huge one. We will try
-		 * again holding the mmap_sem (which implies that the collapse
-		 * operation is done).
-		 */
-		if (vmf->flags & FAULT_FLAG_SPECULATIVE)
-			return VM_FAULT_RETRY;
 		/*
 		 * Leave __pte_alloc() until later: because vm_ops->fault may
 		 * want to allocate huge page, and if we expose page table
@@ -4158,7 +4153,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		 * concurrent faults and from rmap lookups.
 		 */
 		vmf->pte = NULL;
-	} else if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
+	} else {
 		/* See comment in pte_alloc_one_map() */
 		if (pmd_devmap_trans_unstable(vmf->pmd))
 			return 0;
@@ -4167,9 +4162,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		 * pmd from under us anymore at this point because we hold the
 		 * mmap_sem read mode and khugepaged takes it in write mode.
 		 * So now it's safe to run pte_offset_map().
-		 * This is not applicable to the speculative page fault handler
-		 * but in that case, the pte is fetched earlier in
-		 * handle_speculative_fault().
 		 */
 		vmf->pte = pte_offset_map(vmf->pmd, vmf->address);
 		vmf->orig_pte = *vmf->pte;
@@ -4189,6 +4181,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		}
 	}
 
+skip_pmd_checks:
 	if (!vmf->pte) {
 		if (vma_is_anonymous(vmf->vma))
 			return do_anonymous_page(vmf);
