@@ -4473,6 +4473,7 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	 */
 	if (unlikely(pmd_devmap(vmf.orig_pmd) ||
 		     pmd_none(vmf.orig_pmd) ||
+		     pmd_bad(vmf.orig_pmd) ||
 		     pmd_trans_huge(vmf.orig_pmd) ||
 		     is_swap_pmd(vmf.orig_pmd)))
 		goto out_walk;
