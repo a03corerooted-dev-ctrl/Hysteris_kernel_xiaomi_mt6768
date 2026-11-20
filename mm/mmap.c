@@ -2751,10 +2751,21 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
 	vma->vm_prev = NULL;
 	do {
+		struct vm_area_struct *next = vma->vm_next;
+
+		/*
+		 * A speculative fault may still hold a reference to this VMA
+		 * after it leaves the RB tree. Bump the sequence around the
+		 * unlink so in-flight faults fall back before touching its
+		 * page tables.
+		 */
+		vm_write_begin(vma);
 		vma_rb_erase(vma, mm);
+		vm_write_end(vma);
+
 		mm->map_count--;
 		tail_vma = vma;
-		vma = vma->vm_next;
+		vma = next;
 	} while (vma && vma->vm_start < end);
 	*insertion_point = vma;
 	if (vma) {
