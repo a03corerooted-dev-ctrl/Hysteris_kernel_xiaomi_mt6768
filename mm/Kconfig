@@ -784,6 +784,20 @@ config GUP_BENCHMARK
 
 	  See tools/testing/selftests/vm/gup_benchmark.c
 
+config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+	def_bool n
+
+config SPECULATIVE_PAGE_FAULT
+	bool "Speculative page faults"
+	default n
+	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+	depends on ARCH_HAS_PTE_SPECIAL && MMU && SMP
+	help
+	  Try to handle eligible user page faults without holding mmap_lock.
+	  The speculative path is deliberately conservative and falls back to
+	  the regular mmap_lock protected fault handler whenever it encounters
+	  an unsupported VMA, page-table state or concurrent modification.
+
 config ARCH_HAS_PTE_SPECIAL
 	bool
 
