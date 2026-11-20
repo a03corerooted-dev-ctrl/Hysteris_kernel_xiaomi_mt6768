@@ -2997,6 +2997,12 @@ EXPORT_SYMBOL(unmap_mapping_range);
  */
 vm_fault_t do_swap_page(struct vm_fault *vmf)
 {
+	/* Swap faults may wait on migration and manipulate unstable PTEs. */
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		pte_unmap(vmf->pte);
+		return VM_FAULT_RETRY;
+	}
+
 	struct vm_area_struct *vma = vmf->vma;
 	struct page *page = NULL, *swapcache;
 	struct mem_cgroup *memcg;
@@ -3237,27 +3243,35 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	 *
 	 * Here we only have down_read(mmap_sem).
 	 */
-	if (pte_alloc(vma->vm_mm, vmf->pmd, vmf->address))
-		return VM_FAULT_OOM;
+	/*
+	 * The speculative handler only enters with an existing, validated
+	 * PTE table.  It must not instantiate page tables or inspect a PMD
+	 * that can concurrently be transformed by khugepaged.
+	 */
+	if (!(vmf->flags & FAULT_FLAG_SPECULATIVE)) {
+		if (pte_alloc(vma->vm_mm, vmf->pmd, vmf->address))
+			return VM_FAULT_OOM;
 
-	/* See the comment in pte_alloc_one_map() */
-	if (unlikely(pmd_trans_unstable(vmf->pmd)))
-		return 0;
+		/* See the comment in pte_alloc_one_map() */
+		if (unlikely(pmd_trans_unstable(vmf->pmd)))
+			return 0;
+	}
 
 	/* Use the zero-page for reads */
 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
 			!mm_forbids_zeropage(vma->vm_mm)) {
 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
 						vmf->vma_page_prot));
-		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
-				vmf->address, &vmf->ptl);
+		if (!pte_map_lock(vmf))
+			return VM_FAULT_RETRY;
 		if (!pte_none(*vmf->pte))
 			goto unlock;
 		ret = check_stable_address_space(vma->vm_mm);
 		if (ret)
 			goto unlock;
 		/* Deliver the page fault to userland, check inside PT lock */
-		if (userfaultfd_missing(vma)) {
+		if (!(vmf->flags & FAULT_FLAG_SPECULATIVE) &&
+		    userfaultfd_missing(vma)) {
 			pte_unmap_unlock(vmf->pte, vmf->ptl);
 			return handle_userfault(vmf, VM_UFFD_MISSING);
 		}
@@ -4353,6 +4367,13 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 
 	vmf.vma_flags = READ_ONCE(vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vma->vm_page_prot);
+	/* Keep the first 4.19 backport conservative: writes require the
+	 * fully serialized COW path, and this implementation only installs
+	 * the shared zero page for read faults.
+	 */
+	if ((flags & FAULT_FLAG_WRITE) || mm_forbids_zeropage(mm))
+		goto out_put;
+
 
 	/* Can't call userland page fault handler in the speculative path */
 	if (unlikely(vmf.vma_flags & VM_UFFD_MISSING))
