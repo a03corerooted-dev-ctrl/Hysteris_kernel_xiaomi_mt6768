@@ -4413,14 +4413,9 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, struct scan_cont
 
 	VM_BUG_ON_PAGE(gen >= MAX_NR_GENS, page);
 
-	if (!page_evictable(page)) {
-		success = lru_gen_del_page(lruvec, page, true);
-		VM_BUG_ON_PAGE(!success, page);
-		SetPageUnevictable(page);
-		add_page_to_lru_list(page, lruvec, LRU_UNEVICTABLE);
-		__count_vm_events(UNEVICTABLE_PGCULLED, delta);
-		return true;
-	}
+	/* Let the generic reclaim path cull unevictable pages safely. */
+	if (!page_evictable(page))
+		return false;
 
 	if (type == LRU_GEN_FILE && PageAnon(page) && PageDirty(page)) {
 		success = lru_gen_del_page(lruvec, page, true);
