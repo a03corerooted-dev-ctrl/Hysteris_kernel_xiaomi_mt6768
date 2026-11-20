@@ -4272,9 +4272,9 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	struct lru_gen_mm_walk *walk;
 	int young = 0;
 	unsigned long bitmap[BITS_TO_LONGS(MIN_LRU_BATCH)] = {};
-	struct mem_cgroup *memcg = page_memcg(pvmw->page);
+	struct mem_cgroup *memcg;
 	struct pglist_data *pgdat = page_pgdat(pvmw->page);
-	struct lruvec *lruvec = mem_cgroup_lruvec(pgdat, memcg);
+	struct lruvec *lruvec;
 	int old_gen, new_gen, type;
 
 	lockdep_assert_held(pvmw->ptl);
@@ -4282,6 +4282,9 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 
 	if (spin_is_contended(pvmw->ptl))
 		return;
+
+	memcg = get_mem_cgroup_from_page(pvmw->page);
+	lruvec = mem_cgroup_lruvec(pgdat, memcg);
 
 	start = max(pvmw->address & PMD_MASK, pvmw->vma->vm_start);
 	end = pmd_addr_end(pvmw->address, pvmw->vma->vm_end);
@@ -4356,12 +4359,15 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	if (!walk && bitmap_weight(bitmap, MIN_LRU_BATCH) < PAGEVEC_SIZE) {
 		for_each_set_bit(i, bitmap, MIN_LRU_BATCH)
 			activate_page(pte_page(pte[i]));
+		mem_cgroup_put(memcg);
 		return;
 	}
 
 	/* page_update_gen() requires stable page_memcg() */
-	if (!mem_cgroup_trylock_pages(memcg))
+	if (!mem_cgroup_trylock_pages(memcg)) {
+		mem_cgroup_put(memcg);
 		return;
+	}
 
 	if (!walk) {
 		spin_lock_irq(&pgdat->lru_lock);
@@ -4387,6 +4393,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 		spin_unlock_irq(&pgdat->lru_lock);
 
 	mem_cgroup_unlock_pages();
+	mem_cgroup_put(memcg);
 }
 
 /******************************************************************************
