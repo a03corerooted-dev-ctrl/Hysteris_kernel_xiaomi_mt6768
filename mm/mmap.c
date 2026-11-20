@@ -3436,6 +3436,15 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 		vma_link(mm, new_vma, prev, rb_link, rb_parent);
 		*need_rmap_locks = false;
 	}
+
+	/*
+	 * vma_merge(..., keep_locked=true) normally leaves the destination
+	 * sequence odd. The newly allocated path above does so explicitly.
+	 * Keep this contract explicit for every merge shape: move_vma()
+	 * always closes the destination sequence after moving page tables.
+	 */
+	if (!vm_write_is_active(new_vma))
+		vm_write_begin(new_vma);
 	return new_vma;
 
 out_free_mempol:
