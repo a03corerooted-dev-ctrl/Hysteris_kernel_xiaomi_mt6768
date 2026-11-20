@@ -3171,10 +3171,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		count_memcg_event_mm(vma->vm_mm, PGMAJFAULT);
 	} else if (PageHWPoison(page)) {
 		/*
-		 * hwpoisoned dirty swapcache pages are kept for killing
-		 * owner processes (which may be unknown at hwpoison time)
+		 * A speculative lookup has not revalidated the swap PTE under
+		 * its lock yet. Defer the poison result to the locked path.
 		 */
-		ret = VM_FAULT_HWPOISON;
+		ret = (vmf->flags & FAULT_FLAG_SPECULATIVE) ?
+			VM_FAULT_RETRY : VM_FAULT_HWPOISON;
 		delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 		goto out_release;
 	}
@@ -3365,8 +3366,17 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	}
 
 	/* Allocate our own private page. */
-	if (unlikely(anon_vma_prepare(vma)))
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		/*
+		 * anon_vma_prepare() may create and link anon_vma state and
+		 * therefore requires mmap_lock. If teardown raced the initial
+		 * eligibility check, let the locked fault path prepare it.
+		 */
+		if (!READ_ONCE(vma->anon_vma))
+			return VM_FAULT_RETRY;
+	} else if (unlikely(anon_vma_prepare(vma))) {
 		goto oom;
+	}
 	page = alloc_zeroed_user_highpage_movable(vma, vmf->address);
 	if (!page)
 		goto oom;
@@ -3933,8 +3943,16 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret;
 
-	if (unlikely(anon_vma_prepare(vma)))
+	if (vmf->flags & FAULT_FLAG_SPECULATIVE) {
+		/*
+		 * Do not create anon_vma state without mmap_lock. The PTE-lock
+		 * acquisition in finish_fault() revalidates the VMA sequence.
+		 */
+		if (!READ_ONCE(vma->anon_vma))
+			return VM_FAULT_RETRY;
+	} else if (unlikely(anon_vma_prepare(vma))) {
 		return VM_FAULT_OOM;
+	}
 
 	vmf->cow_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 	if (!vmf->cow_page)
