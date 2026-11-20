@@ -457,6 +457,12 @@ static void __vma_rb_erase(struct vm_area_struct *vma, struct rb_root *root)
 	 * augmented rbtree callbacks.
 	 */
 	mm_rb_write_lock(vma->vm_mm);
+	/*
+	 * Readers pin the VMA after dropping mm_rb_lock. Publish detachment
+	 * before removing the node so those readers never need to inspect
+	 * rb_parent_color without the tree lock.
+	 */
+	WRITE_ONCE(vma->vm_detached, true);
 	rb_erase_augmented(&vma->vm_rb, root, &vma_gap_callbacks);
 	mm_rb_write_unlock(vma->vm_mm);
 	RB_CLEAR_NODE(&vma->vm_rb);
