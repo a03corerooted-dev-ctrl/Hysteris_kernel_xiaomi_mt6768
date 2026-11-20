@@ -349,26 +349,14 @@ static bool damon_pa_invalid_damos_page(struct page *page, struct damos *s)
 }
 
 /*
- * [4.19 backport - RESOLVED after review of mm/vmscan.c]
+ * Hysteris-specific pageout bridge.
  *
- * mainline's reclaim_pages() doesn't exist here, but this kernel has
- * something arguably even better for our purposes: reclaim_pages_from_list()
- * in mm/vmscan.c, gated behind CONFIG_PROCESS_RECLAIM - which is already
- * confirmed enabled in this device's defconfig
- * (CONFIG_PROCESS_RECLAIM=y). It's already declared unconditionally in
- * this kernel's own include/linux/rmap.h (which this file already
- * includes), so no header changes were needed at all.
- *
- * It takes an extra 'struct vm_area_struct *vma' parameter (used to
- * restrict try_to_unmap() to a single vma) that mainline's reclaim_pages()
- * doesn't have. Passing NULL here is not a shortcut or simplification -
- * confirmed directly in this kernel's mm/rmap.c that rmap_walk() only
- * restricts the walk to rwc->target_vma when it's non-NULL; NULL is the
- * normal/general codepath (another call site in the same file passes
- * NULL explicitly for exactly this "not tied to one vma" case), which is
- * the semantically correct choice here since DAMON's physical-address
- * mode has no single owning vma for a page - it may be mapped by several
- * processes or none at a specific instant.
+ * mainline's reclaim_pages() API is not present in this vendor tree.  The
+ * dedicated damon_reclaim_pages_from_list() helper in mm/vmscan.c processes
+ * isolated pages by pgdat because this tree's shrink_page_list() dereferences
+ * that pointer.  The DAMON backend accounts NR_ISOLATED_ANON/FILE on
+ * isolation, and the helper balances the full batch (including pages freed
+ * during reclaim) before putting remaining pages back on the LRU.
  */
 static unsigned long damon_pa_pageout(struct damon_region *r, struct damos *s,
 		unsigned long *sz_filter_passed)
