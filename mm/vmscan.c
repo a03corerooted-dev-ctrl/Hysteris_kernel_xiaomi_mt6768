@@ -5318,6 +5318,8 @@ static int run_cmd(char cmd, int memcg_id, int nid, unsigned long seq,
 	if (memcg_id != mem_cgroup_id(memcg))
 		goto done;
 
+	sc->target_mem_cgroup = memcg;
+
 	if (nid < 0 || nid >= MAX_NUMNODES || !node_state(nid, N_MEMORY))
 		goto done;
 
