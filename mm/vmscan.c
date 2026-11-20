@@ -3388,7 +3388,7 @@ static bool positive_ctrl_err(struct ctrl_pos *sp, struct ctrl_pos *pv)
  *                          the aging
  ******************************************************************************/
 
-static int page_update_gen(struct page *page, int gen)
+static int page_update_gen(struct page *page, int gen, int *type)
 {
 	unsigned long old_flags, new_flags;
 
@@ -3409,6 +3409,8 @@ static int page_update_gen(struct page *page, int gen)
 		new_flags &= ~(LRU_REFS_MASK | LRU_REFS_FLAGS);
 	} while (new_flags != old_flags &&
 		 cmpxchg(&page->flags, old_flags, new_flags) != old_flags);
+
+	*type = !test_bit(PG_swapbacked, &old_flags);
 
 	return ((old_flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
 }
@@ -3445,9 +3447,8 @@ static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaimin
 }
 
 static void update_batch_size(struct lru_gen_mm_walk *walk, struct page *page,
-			      int old_gen, int new_gen)
+			      int old_gen, int new_gen, int type)
 {
-	int type = page_is_file_cache(page);
 	int zone = page_zonenum(page);
 	int delta = hpage_nr_pages(page);
 
@@ -3568,7 +3569,7 @@ static bool walk_pte_range(pmd_t *pmd, unsigned long start, unsigned long end,
 	struct lru_gen_mm_walk *priv = walk->private;
 	struct mem_cgroup *memcg = lruvec_memcg(priv->lruvec);
 	struct pglist_data *pgdat = lruvec_pgdat(priv->lruvec);
-	int old_gen, new_gen;
+	int old_gen, new_gen, type;
 
 	VM_BUG_ON(pmd_trans_huge(*pmd) || pmd_devmap(*pmd));
 
@@ -3623,9 +3624,9 @@ restart:
 			set_page_dirty(page);
 
 		new_gen = lru_gen_from_seq(READ_ONCE(priv->lruvec->lrugen.max_seq));
-		old_gen = page_update_gen(page, new_gen);
+		old_gen = page_update_gen(page, new_gen, &type);
 		if (old_gen >= 0 && old_gen != new_gen)
-			update_batch_size(priv, page, old_gen, new_gen);
+			update_batch_size(priv, page, old_gen, new_gen, type);
 	}
 
 	if (i < PTRS_PER_PTE && get_next_vma(walk, PMD_MASK, PAGE_SIZE, &start, &end))
@@ -4366,7 +4367,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 			continue;
 
 		if (walk)
-			update_batch_size(walk, page, old_gen, new_gen);
+			update_batch_size(walk, page, old_gen, new_gen, type);
 		else
 			lru_gen_update_size(lruvec, page, old_gen, new_gen);
 	}
