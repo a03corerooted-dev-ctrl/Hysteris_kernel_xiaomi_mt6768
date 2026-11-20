@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   arm64-mt6768:
-    name: MT6768 ARM64 / SPF=y
+    name: MT6768 ARM64 / SPF=y / MGLRU
     runs-on: ubuntu-22.04
     timeout-minutes: 100
     env:
@@ -62,159 +62,22 @@ jobs:
           else
             scripts/config --file out/.config --disable SPECULATIVE_PAGE_FAULT
           fi
-          # Exercise the MGLRU code in this build while keeping the classic
-          # LRU as the boot-time default for the experimental branch.
+          # Compile MGLRU and its diagnostics, but retain classic LRU at boot.
           scripts/config --file out/.config --enable LRU_GEN
           scripts/config --file out/.config --disable LRU_GEN_ENABLED
           scripts/config --file out/.config --enable DEBUG_FS
           scripts/config --file out/.config --enable LRU_GEN_STATS
           make O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" olddefconfig
-          grep -E '^(CONFIG_SPECULATIVE_PAGE_FAULT=y|# CONFIG_SPECULATIVE_PAGE_FAULT is not set)$' out/.config
           if [ "$SPF_EXPECTED" = "y" ]; then
             grep -q '^CONFIG_SPECULATIVE_PAGE_FAULT=y$' out/.config
           else
-            grep -q '^# CONFIG_SPECULATIVE_PAGE_FAULT is not set
-      - name: Build ARM64 Image.gz
-        run: |
-          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
-
-      - name: Record build configuration
-        if: always()
-        run: |
-          {
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "commit=${GITHUB_SHA}"
-            echo "spf_expected=${SPF_EXPECTED}"
-            echo "compiler=$($CC --version | head -n 1)"
-            echo "linker=$($LD --version | head -n 1)"
-          } > out/build-metadata.txt
-          test ! -f out/.config || cp out/.config out/kernel.config
-
-      - name: Upload config and build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
-          if-no-files-found: ignore
-          path: |
-            out/kernel.config
-            out/build-metadata.txt
-            out/arch/arm64/boot/Image.gz
- out/.config
+            grep -q '^# CONFIG_SPECULATIVE_PAGE_FAULT is not set$' out/.config
           fi
           # Fail closed if Kconfig silently drops any requested MGLRU option.
-          grep -q '^CONFIG_LRU_GEN=y
-      - name: Build ARM64 Image.gz
-        run: |
-          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
-
-      - name: Record build configuration
-        if: always()
-        run: |
-          {
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "commit=${GITHUB_SHA}"
-            echo "spf_expected=${SPF_EXPECTED}"
-            echo "compiler=$($CC --version | head -n 1)"
-            echo "linker=$($LD --version | head -n 1)"
-          } > out/build-metadata.txt
-          test ! -f out/.config || cp out/.config out/kernel.config
-
-      - name: Upload config and build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
-          if-no-files-found: ignore
-          path: |
-            out/kernel.config
-            out/build-metadata.txt
-            out/arch/arm64/boot/Image.gz
- out/.config
-          grep -q '^# CONFIG_LRU_GEN_ENABLED is not set
-      - name: Build ARM64 Image.gz
-        run: |
-          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
-
-      - name: Record build configuration
-        if: always()
-        run: |
-          {
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "commit=${GITHUB_SHA}"
-            echo "spf_expected=${SPF_EXPECTED}"
-            echo "compiler=$($CC --version | head -n 1)"
-            echo "linker=$($LD --version | head -n 1)"
-          } > out/build-metadata.txt
-          test ! -f out/.config || cp out/.config out/kernel.config
-
-      - name: Upload config and build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
-          if-no-files-found: ignore
-          path: |
-            out/kernel.config
-            out/build-metadata.txt
-            out/arch/arm64/boot/Image.gz
- out/.config
-          grep -q '^CONFIG_DEBUG_FS=y
-      - name: Build ARM64 Image.gz
-        run: |
-          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
-
-      - name: Record build configuration
-        if: always()
-        run: |
-          {
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "commit=${GITHUB_SHA}"
-            echo "spf_expected=${SPF_EXPECTED}"
-            echo "compiler=$($CC --version | head -n 1)"
-            echo "linker=$($LD --version | head -n 1)"
-          } > out/build-metadata.txt
-          test ! -f out/.config || cp out/.config out/kernel.config
-
-      - name: Upload config and build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
-          if-no-files-found: ignore
-          path: |
-            out/kernel.config
-            out/build-metadata.txt
-            out/arch/arm64/boot/Image.gz
- out/.config
-          grep -q '^CONFIG_LRU_GEN_STATS=y
-      - name: Build ARM64 Image.gz
-        run: |
-          make -j2 O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" Image.gz
-
-      - name: Record build configuration
-        if: always()
-        run: |
-          {
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "commit=${GITHUB_SHA}"
-            echo "spf_expected=${SPF_EXPECTED}"
-            echo "compiler=$($CC --version | head -n 1)"
-            echo "linker=$($LD --version | head -n 1)"
-          } > out/build-metadata.txt
-          test ! -f out/.config || cp out/.config out/kernel.config
-
-      - name: Upload config and build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
-          if-no-files-found: ignore
-          path: |
-            out/kernel.config
-            out/build-metadata.txt
-            out/arch/arm64/boot/Image.gz
- out/.config
+          grep -q '^CONFIG_LRU_GEN=y$' out/.config
+          grep -q '^# CONFIG_LRU_GEN_ENABLED is not set$' out/.config
+          grep -q '^CONFIG_DEBUG_FS=y$' out/.config
+          grep -q '^CONFIG_LRU_GEN_STATS=y$' out/.config
 
       - name: Build ARM64 Image.gz
         run: |
@@ -236,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spf-419-${{ env.SPF_EXPECTED }}-${{ github.sha }}
+          name: spf-419-mglru-${{ github.sha }}
           if-no-files-found: ignore
           path: |
             out/kernel.config
