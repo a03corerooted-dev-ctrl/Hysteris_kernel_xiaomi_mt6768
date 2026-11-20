@@ -419,7 +419,13 @@ unsigned long move_page_tables(struct vm_area_struct *vma,
 		 * PUD level if possible.
 		 */
 		extent = get_extent(NORMAL_PUD, old_addr, old_end, new_addr);
-		if (IS_ENABLED(CONFIG_HAVE_MOVE_PUD) && extent == PUD_SIZE) {
+		/*
+		 * SPF locks PTE tables, not the higher-level PMD/PUD
+		 * entries. Keep fast table moves disabled until they can
+		 * synchronize with speculative page-table walkers.
+		 */
+		if (!IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT) &&
+		    IS_ENABLED(CONFIG_HAVE_MOVE_PUD) && extent == PUD_SIZE) {
 			pud_t *old_pud, *new_pud;
 
 			old_pud = get_old_pud(vma->vm_mm, old_addr);
@@ -443,14 +449,16 @@ unsigned long move_page_tables(struct vm_area_struct *vma,
 			break;
 		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd) ||
 		    pmd_devmap(*old_pmd)) {
-			if (extent == HPAGE_PMD_SIZE &&
+			if (!IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT) &&
+			    extent == HPAGE_PMD_SIZE &&
 			    move_pgt_entry(HPAGE_PMD, vma, old_addr, new_addr,
 				    old_end, old_pmd, new_pmd, need_rmap_locks))
 				continue;
 			split_huge_pmd(vma, old_pmd, old_addr);
 			if (pmd_trans_unstable(old_pmd))
 				continue;
-		} else if (IS_ENABLED(CONFIG_HAVE_MOVE_PMD) &&
+		} else if (!IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT) &&
+			   IS_ENABLED(CONFIG_HAVE_MOVE_PMD) &&
 			   extent == PMD_SIZE) {
 			/*
 			 * If the extent is PMD-sized, try to speed the move by
