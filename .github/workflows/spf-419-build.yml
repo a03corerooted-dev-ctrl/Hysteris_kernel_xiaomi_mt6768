@@ -50,9 +50,13 @@ jobs:
           sudo apt-get install -y bc bison build-essential clang-14 flex gcc-aarch64-linux-gnu libelf-dev libssl-dev lld-14 llvm-14 llvm-14-tools python3
           # Linux 4.19's LTO scripts invoke the unversioned llvm-nm name.
           LLVM_NM="$(command -v llvm-nm-14 || command -v llvm-nm)"
+          LLVM_AR="$(command -v llvm-ar-14 || command -v llvm-ar)"
           test -n "$LLVM_NM"
+          test -n "$LLVM_AR"
           sudo ln -sf "$LLVM_NM" /usr/local/bin/llvm-nm
+          sudo ln -sf "$LLVM_AR" /usr/local/bin/llvm-ar
           llvm-nm --version
+          llvm-ar --version
 
       - name: Configure MT6768 defconfig
         run: |
