@@ -19,9 +19,13 @@ generations. Pages in newer generations have been accessed more recently;
 older generations are reclaim candidates.
 
 The implementation tracks anonymous and file-backed pages separately while
-aging both types on a common generation sequence. It also tracks up to four
-tiers within each generation. Tiers represent different access frequencies
-and feed the refault-based protection logic.
+aging both types on a common generation sequence. The active generation
+window is dynamic: it contains at least two generations
+(``MIN_NR_GENS=2``) and at most four (``MAX_NR_GENS=4``). Four is the
+maximum number of generation slots, not a value encoded in the runtime
+``enabled`` mask. Each generation also has up to four independent access
+frequency tiers (``MAX_NR_TIERS=4``) that feed the refault-based protection
+logic.
 
 Aging uses reverse-mapping information and page-table walks to find accessed
 pages. Eviction consumes old generations, uses refault feedback to balance
