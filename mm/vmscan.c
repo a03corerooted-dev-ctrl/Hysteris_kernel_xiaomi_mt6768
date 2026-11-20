@@ -4266,7 +4266,7 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
  * to the PTE table to the Bloom filter. This process is a feedback loop from
  * the eviction to the aging.
  */
-void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
+bool lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 {
 	int i;
 	pte_t *pte;
