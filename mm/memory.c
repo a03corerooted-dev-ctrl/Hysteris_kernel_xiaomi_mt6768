@@ -4385,6 +4385,16 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	seq = raw_read_seqcount(&vmf.vma->vm_sequence);
 	if (seq & 1)
 		return VM_FAULT_RETRY;
+	vmf.sequence = seq;
+
+	/*
+	 * get_vma() may have taken a reference immediately before munmap
+	 * detached this VMA from the RB tree. If the sequence snapshot is
+	 * taken after the detach completed, the sequence is even again;
+	 * reject the stale VMA before touching any page-table entry.
+	 */
+	if (vma_has_changed(&vmf))
+		return VM_FAULT_RETRY;
 
 	/*
 	 * Do not call vm_ops callbacks without mmap_lock. This also excludes
@@ -4520,7 +4530,6 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 
 	vmf.pgoff = linear_page_index(vmf.vma, address);
 	vmf.gfp_mask = __get_fault_gfp_mask(vmf.vma);
-	vmf.sequence = seq;
 	vmf.flags = flags;
 
 	local_irq_enable();
