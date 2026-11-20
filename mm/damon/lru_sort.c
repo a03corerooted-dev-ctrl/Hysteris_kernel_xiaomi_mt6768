@@ -13,17 +13,11 @@
  *   etc. are declared via the older linux/kernel.h instead (same fix as
  *   reclaim.c).
  *
- * - IMPORTANT BEHAVIORAL GAP: this module drives two DAMOS actions -
- *   DAMOS_LRU_PRIO for "hot" regions (mark_page_accessed(), confirmed
- *   working - see mm/damon/paddr.c's damon_pa_mark_accessed()) and
- *   DAMOS_LRU_DEPRIO for "cold" regions (deactivate_page(), confirmed
- *   NOT present in this kernel - see damon_pa_deactivate_pages() in
- *   paddr.c, a documented no-op). That means DAMON_LRU_SORT's hot-page
- *   protection half will work, but its cold-page deprioritization half
- *   silently does nothing on this device. This is not a new limitation
- *   introduced here - it's the same paddr.c gap from stage 4, just
- *   worth calling out again since this module's whole purpose rests on
- *   both halves working together.
+ * - Hysteris-specific adaptation: unlike the reference vendor tree,
+ *   this kernel implements the generic deactivate_page() helper in
+ *   mm/swap.c.  paddr.c wires DAMOS_LRU_DEPRIO to that helper, so both
+ *   hot-page promotion and cold-page deactivation are supported for
+ *   anonymous and file-backed memory.
  */
 #include <linux/damon.h>
 #include <linux/kernel.h>
