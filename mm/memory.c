@@ -4394,9 +4394,10 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	 * Shared, file-backed, userfaultfd-managed and stack-growing mappings
 	 * are left to the normal mmap_lock-protected fault path.
 	 */
-	if ((vmf.vma_flags & (VM_SHARED | __VM_UFFD_FLAGS |
-			      VM_GROWSDOWN | VM_GROWSUP | VM_SPECIAL |
-			      VM_HUGETLB | VM_LOCKED_MASK)) ||
+	if ((vmf.vma_flags & (VM_SHARED | VM_UFFD_MISSING | VM_UFFD_WP |
+			      VM_UFFD_MINOR | VM_GROWSDOWN | VM_GROWSUP |
+			      VM_SPECIAL | VM_HUGETLB | VM_LOCKED |
+			      VM_LOCKONFAULT)) ||
 	    READ_ONCE(vmf.vma->vm_file))
 		return VM_FAULT_RETRY;
 
