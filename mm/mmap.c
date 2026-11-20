@@ -936,8 +936,14 @@ again:
 		 * split_vma has split insert from vma, and needs
 		 * us to insert it before dropping the locks
 		 * (it may either follow vma or precede it).
+		 *
+		 * The new VMA becomes visible to lockless speculative
+		 * lookups at this point, so keep its sequence odd while
+		 * publishing it in the list and RB tree.
 		 */
+		vm_write_begin(insert);
 		__insert_vm_struct(mm, insert);
+		vm_write_end(insert);
 	} else {
 		if (start_changed)
 			vma_gap_update(vma);
