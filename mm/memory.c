@@ -4388,10 +4388,14 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	if ((flags & FAULT_FLAG_WRITE) || mm_forbids_zeropage(mm))
 		return VM_FAULT_RETRY;
 
-	/* Userfaultfd and stack growth require the serialized fault path. */
-	if (unlikely(vmf.vma_flags & VM_UFFD_MISSING))
-		return VM_FAULT_RETRY;
-	if (vmf.vma_flags & (VM_GROWSDOWN | VM_GROWSUP))
+	/*
+	 * Keep this first 4.19 implementation to private anonymous VMAs.
+	 * Shared, file-backed, userfaultfd-managed and stack-growing mappings
+	 * are left to the normal mmap_lock-protected fault path.
+	 */
+	if ((vmf.vma_flags & (VM_SHARED | VM_UFFD_MISSING |
+			      VM_GROWSDOWN | VM_GROWSUP)) ||
+	    READ_ONCE(vmf.vma->vm_file))
 		return VM_FAULT_RETRY;
 
 	if (address < READ_ONCE(vmf.vma->vm_start) ||
@@ -4458,10 +4462,17 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	vmf.pte = pte_offset_map(vmf.pmd, address);
 	vmf.orig_pte = READ_ONCE(*vmf.pte);
 	barrier();
-	if (pte_none(vmf.orig_pte)) {
+	/*
+	 * Only handle an empty PTE. Present, swap, migration, NUMA hinting
+	 * and other special entries take the regular serialized path.
+	 */
+	if (!pte_none(vmf.orig_pte)) {
 		pte_unmap(vmf.pte);
 		vmf.pte = NULL;
+		goto out_walk;
 	}
+	pte_unmap(vmf.pte);
+	vmf.pte = NULL;
 
 	vmf.pgoff = linear_page_index(vmf.vma, address);
 	vmf.gfp_mask = __get_fault_gfp_mask(vmf.vma);
