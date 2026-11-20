@@ -343,11 +343,13 @@ struct vm_area_struct {
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
-	seqcount_t vm_sequence;
-	atomic_t vm_ref_count;		/* see get_vma(), put_vma() */
-#endif
-
+	ANDROID_KABI_USE(1, struct {
+		seqcount_t vm_sequence;
+		atomic_t vm_ref_count;	/* see get_vma(), put_vma() */
+	});
+#else
 	ANDROID_KABI_RESERVE(1);
+#endif
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
 	ANDROID_KABI_RESERVE(4);
