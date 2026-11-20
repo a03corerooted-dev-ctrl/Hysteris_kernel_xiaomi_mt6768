@@ -4372,11 +4372,11 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 		return VM_FAULT_RETRY;
 
 	/*
-	 * anon_vma must already exist: anon_vma_prepare() requires mmap_lock
-	 * and may walk neighboring VMAs.
+	 * This speculative path only installs the shared zero page for
+	 * read faults into an empty PTE. It does not call anon_vma_prepare()
+	 * or create private anonymous pages; write/COW faults use the
+	 * regular mmap_lock-protected path.
 	 */
-	if (unlikely(!READ_ONCE(vmf.vma->anon_vma)))
-		return VM_FAULT_RETRY;
 
 	vmf.vma_flags = READ_ONCE(vmf.vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vmf.vma->vm_page_prot);
