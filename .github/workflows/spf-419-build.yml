@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - test/spf-419-ci-enabled
+      - experimental/mglru
     paths:
       - '.github/workflows/spf-419-build.yml'
       - 'arch/arm64/**'
@@ -61,6 +62,12 @@ jobs:
           else
             scripts/config --file out/.config --disable SPECULATIVE_PAGE_FAULT
           fi
+          # Exercise the MGLRU code in this build while keeping the classic
+          # LRU as the boot-time default for the experimental branch.
+          scripts/config --file out/.config --enable LRU_GEN
+          scripts/config --file out/.config --disable LRU_GEN_ENABLED
+          scripts/config --file out/.config --enable DEBUG_FS
+          scripts/config --file out/.config --enable LRU_GEN_STATS
           make O=out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" LD="$LD" HOSTCC="$HOSTCC" HOSTLD="$HOSTLD" olddefconfig
           grep -E '^(CONFIG_SPECULATIVE_PAGE_FAULT=y|# CONFIG_SPECULATIVE_PAGE_FAULT is not set)$' out/.config
           if [ "$SPF_EXPECTED" = "y" ]; then
