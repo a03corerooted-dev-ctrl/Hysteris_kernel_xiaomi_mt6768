@@ -4541,7 +4541,7 @@ bool can_reuse_spf_vma(struct vm_area_struct *vma, unsigned long address)
 
 	seq = raw_read_seqcount(&vma->vm_sequence);
 	if (!(seq & 1)) {
-		ret = !RB_EMPTY_NODE(&vma->vm_rb) &&
+		ret = !READ_ONCE(vma->vm_detached) &&
 			READ_ONCE(vma->vm_start) <= address &&
 			address < READ_ONCE(vma->vm_end) &&
 			!read_seqcount_retry(&vma->vm_sequence, seq);
