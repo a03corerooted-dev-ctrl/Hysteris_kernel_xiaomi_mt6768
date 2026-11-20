@@ -3078,6 +3078,7 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	struct rb_node **rb_link, *rb_parent;
 	pgoff_t pgoff = addr >> PAGE_SHIFT;
 	int error;
+	bool vm_write_started = false;
 
 	/* Until we need other flags, refuse anything except VM_EXEC. */
 	if ((flags & (~VM_EXEC)) != 0)
@@ -3138,14 +3139,19 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	vma->vm_pgoff = pgoff;
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
+	vm_write_begin(vma);
+	vm_write_started = true;
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 out:
 	perf_event_mmap(vma);
+	if (!vm_write_started)
+		vm_write_begin(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
 	mm->data_vm += len >> PAGE_SHIFT;
 	if (flags & VM_LOCKED)
 		mm->locked_vm += (len >> PAGE_SHIFT);
-	vma->vm_flags |= VM_SOFTDIRTY;
+	WRITE_ONCE(vma->vm_flags, vma->vm_flags | VM_SOFTDIRTY);
+	vm_write_end(vma);
 	return 0;
 }
 
