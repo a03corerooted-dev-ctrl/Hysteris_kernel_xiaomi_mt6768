@@ -1507,9 +1507,14 @@ static inline void vm_write_end(struct vm_area_struct *vma)
 {
 	raw_write_seqcount_end(&vma->vm_sequence);
 }
+static inline bool vm_write_is_active(struct vm_area_struct *vma)
+{
+	return READ_ONCE(vma->vm_sequence.sequence) & 1;
+}
 #else
 static inline void vm_write_begin(struct vm_area_struct *vma) { }
 static inline void vm_write_end(struct vm_area_struct *vma) { }
+static inline bool vm_write_is_active(struct vm_area_struct *vma) { return false; }
 #endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
 
 extern void truncate_pagecache(struct inode *inode, loff_t new);
