@@ -15,6 +15,7 @@
 #include <linux/migrate.h>
 #include <linux/mm_inline.h>
 #include <linux/memcontrol.h>
+#include <linux/vmstat.h>
 
 #include "ops-common.h"
 
@@ -34,19 +35,15 @@
  * memory subsystem addition). Nothing here depends on it since we don't
  * use mainline's tiered-memory-aware migration target selection.
  *
- * Two actions are INTENTIONALLY LEFT AS STUBS, for a distinct, confirmed
- * reason (not guessed) - see the comment directly above each:
- *   - damon_pa_deactivate_pages() (DAMOS_LRU_DEPRIO) - needs
- *     deactivate_page(), confirmed absent (only the older, file-only
- *     deactivate_file_page() exists here).
+ * DAMOS_PAGEOUT uses the Hysteris-specific
+ * damon_reclaim_pages_from_list() helper in mm/vmscan.c.  That helper
+ * batches pages by pgdat because this tree's shrink_page_list() requires a
+ * valid node pointer, and balances NR_ISOLATED_ANON/FILE for all isolated
+ * base pages, including compound pages.
  *
- * DAMOS_PAGEOUT (damon_pa_pageout()) IS fully implemented: this kernel
- * has reclaim_pages_from_list() in mm/vmscan.c (gated by
- * CONFIG_PROCESS_RECLAIM, confirmed =y in this device's defconfig - this
- * is an already-active Android vendor reclaim feature, not new code),
- * which serves the same purpose as mainline's reclaim_pages(). See the
- * comment above damon_pa_pageout() below for details on its extra 'vma'
- * parameter and why NULL is passed for it.
+ * DAMOS_LRU_DEPRIO is fully implemented here: this tree provides the
+ * generic deactivate_page() helper in mm/swap.c, which handles both
+ * anonymous and file-backed active pages.
  *
  * DAMOS_MIGRATE_HOT/COLD (damon_pa_migrate and helpers) IS fully ported
  * below, at the user's request, even though this specific device
