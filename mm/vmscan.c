@@ -1541,6 +1541,77 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 	return ret;
 }
 
+#ifdef CONFIG_DAMON_PADDR
+/*
+ * Reclaim pages isolated by DAMON's physical-address backend.
+ *
+ * The page list may span nodes, while shrink_page_list() in this vendor tree
+ * dereferences pgdat in its writeback paths.  Process one node at a time and
+ * pass its real pgdat.  isolate_lru_page() does not account NR_ISOLATED_*;
+ * the DAMON backend increments those counters as it isolates pages, so
+ * balance the complete isolated batch here (including pages freed by
+ * shrink_page_list()) before putting unreclaimed pages back on the LRU.
+ */
+unsigned long damon_reclaim_pages_from_list(struct list_head *page_list)
+{
+	unsigned long nr_reclaimed = 0;
+
+	while (!list_empty(page_list)) {
+		struct pglist_data *pgdat = page_pgdat(lru_to_page(page_list));
+		LIST_HEAD(node_pages);
+		unsigned long nr_isolated_anon = 0;
+		unsigned long nr_isolated_file = 0;
+		struct page *page, *next;
+		struct scan_control sc = {
+			.gfp_mask = GFP_KERNEL,
+			.priority = DEF_PRIORITY,
+			.may_writepage = 1,
+			.may_unmap = 1,
+			.may_swap = 1,
+		};
+
+		list_for_each_entry_safe(page, next, page_list, lru) {
+			unsigned long nr_pages;
+
+			if (page_pgdat(page) != pgdat)
+				continue;
+
+			nr_pages = hpage_nr_pages(page);
+			if (page_is_file_cache(page))
+				nr_isolated_file += nr_pages;
+			else
+				nr_isolated_anon += nr_pages;
+
+			ClearPageActive(page);
+			list_move(&page->lru, &node_pages);
+		}
+
+		nr_reclaimed += shrink_page_list(&node_pages, pgdat, &sc,
+				TTU_IGNORE_ACCESS, NULL, true);
+
+		/*
+		 * shrink_page_list() only adjusts NR_ISOLATED_* itself when
+		 * pgdat is NULL.  We pass a valid node, so release the entire
+		 * isolated batch here, counting compound pages in base pages.
+		 */
+		if (nr_isolated_anon)
+			mod_node_page_state(pgdat, NR_ISOLATED_ANON,
+					-(long)nr_isolated_anon);
+		if (nr_isolated_file)
+			mod_node_page_state(pgdat, NR_ISOLATED_FILE,
+					-(long)nr_isolated_file);
+
+		while (!list_empty(&node_pages)) {
+			page = lru_to_page(&node_pages);
+			list_del(&page->lru);
+			putback_lru_page(page);
+		}
+	}
+
+	return nr_reclaimed;
+}
+#endif /* CONFIG_DAMON_PADDR */
+
 /*
  * Attempt to remove the specified page from its LRU.  Only take this page
  * if it is of the appropriate PageActive status.  Pages which are being
