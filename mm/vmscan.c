@@ -1589,10 +1589,17 @@ unsigned long damon_reclaim_pages_from_list(struct list_head *page_list)
 		nr_reclaimed += shrink_page_list(&node_pages, pgdat, &sc,
 				TTU_IGNORE_ACCESS, NULL, true);
 
+		while (!list_empty(&node_pages)) {
+			page = lru_to_page(&node_pages);
+			list_del(&page->lru);
+			putback_lru_page(page);
+		}
+
 		/*
-		 * shrink_page_list() only adjusts NR_ISOLATED_* itself when
-		 * pgdat is NULL.  We pass a valid node, so release the entire
-		 * isolated batch here, counting compound pages in base pages.
+		 * Match the normal inactive-list reclaim ordering: put surviving
+		 * pages back first, then release the isolated accounting for the
+		 * complete batch.  shrink_page_list() only adjusts NR_ISOLATED_*
+		 * itself when pgdat is NULL; we pass a valid node, so account here.
 		 */
 		if (nr_isolated_anon)
 			mod_node_page_state(pgdat, NR_ISOLATED_ANON,
@@ -1600,12 +1607,6 @@ unsigned long damon_reclaim_pages_from_list(struct list_head *page_list)
 		if (nr_isolated_file)
 			mod_node_page_state(pgdat, NR_ISOLATED_FILE,
 					-(long)nr_isolated_file);
-
-		while (!list_empty(&node_pages)) {
-			page = lru_to_page(&node_pages);
-			list_del(&page->lru);
-			putback_lru_page(page);
-		}
 	}
 
 	return nr_reclaimed;
