@@ -564,10 +564,10 @@ struct vm_operations_struct {
 static inline void INIT_VMA(struct vm_area_struct *vma)
 {
 	INIT_LIST_HEAD(&vma->anon_vma_chain);
-	/* SPF uses RB_EMPTY_NODE() to detect a detached VMA. */
 	RB_CLEAR_NODE(&vma->vm_rb);
 	seqcount_init(&vma->vm_sequence);
 	atomic_set(&vma->vm_ref_count, 1);
+	WRITE_ONCE(vma->vm_detached, false);
 }
 #else
 static inline void INIT_VMA(struct vm_area_struct *vma)
