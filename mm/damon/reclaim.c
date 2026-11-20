@@ -9,10 +9,6 @@
 
 /*
  * [4.19 backport]
- * - <linux/kstrtox.h> doesn't exist in this kernel (kstrtobool/kstrtoul
- *   etc. were later split out of the older monolithic linux/kernel.h into
- *   their own header; here they're still declared via kernel.h, included
- *   below instead).
  * - DAMOS_PAGEOUT is backed by Hysteris's
  *   damon_reclaim_pages_from_list() helper in mm/vmscan.c.  Unlike the
  *   reference vendor tree, this helper groups isolated pages by pgdat and
