@@ -3388,6 +3388,17 @@ static bool positive_ctrl_err(struct ctrl_pos *sp, struct ctrl_pos *pv)
  *                          the aging
  ******************************************************************************/
 
+static void page_clear_lru_refs(struct page *page)
+{
+	unsigned long old_flags, new_flags;
+
+	do {
+		new_flags = old_flags = READ_ONCE(page->flags);
+		new_flags &= ~(LRU_REFS_MASK | LRU_REFS_FLAGS);
+	} while (new_flags != old_flags &&
+		 cmpxchg(&page->flags, old_flags, new_flags) != old_flags);
+}
+
 static int page_update_gen(struct page *page, int gen, int *type)
 {
 	unsigned long old_flags, new_flags;
@@ -4678,8 +4689,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	 * they were isolated from. See lru_gen_add_page().
 	 */
 	list_for_each_entry(page, &list, lru) {
-		ClearPageReferenced(page);
-		ClearPageWorkingset(page);
+		page_clear_lru_refs(page);
 
 		if (PageReclaim(page) && (PageDirty(page) || PageWriteback(page)))
 			ClearPageActive(page);
