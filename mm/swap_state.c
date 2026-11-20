@@ -114,7 +114,7 @@ void show_swap_cache_info(void)
  */
 int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 {
-	int error, i, nr = hpage_nr_pages(page);
+	int error = 0, i, nr = hpage_nr_pages(page);
 	struct address_space *address_space;
 	pgoff_t idx = swp_offset(entry);
 
@@ -128,25 +128,37 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 	address_space = swap_address_space(entry);
 	xa_lock_irq(&address_space->i_pages);
 	for (i = 0; i < nr; i++) {
-		void *item;
-		void __rcu **slot;
-		struct radix_tree_node *node;
+		void *item, *old;
 
 		set_page_private(page + i, entry.val + i);
-		error = __radix_tree_create(&address_space->i_pages,
-					    idx + i, 0, &node, &slot);
-		if (unlikely(error))
-			break;
 
-		item = radix_tree_deref_slot_protected(slot,
-				&address_space->i_pages.xa_lock);
-		if (WARN_ON_ONCE(item && !radix_tree_exceptional_entry(item))) {
+		/*
+		 * Swap-cache slots may contain MGLRU shadow value entries.
+		 * Ordinary page pointers (or other non-value entries) must
+		 * never be overwritten by a swap-in allocation.
+		 */
+		item = radix_tree_lookup(&address_space->i_pages, idx + i);
+		if (WARN_ON_ONCE(item && !xa_is_value(item))) {
 			error = -EEXIST;
 			break;
 		}
 
-		__radix_tree_replace(&address_space->i_pages, node, slot,
-				     page + i, NULL);
+		/*
+		 * Compare-and-exchange preserves the shadow only if the slot
+		 * still contains the value observed above. __xa_cmpxchg()
+		 * expects xa_lock to be held; GFP_NOWAIT uses the radix-tree
+		 * nodes preloaded by the caller without sleeping under the lock.
+		 */
+		old = __xa_cmpxchg(&address_space->i_pages, idx + i, item,
+				   page + i, GFP_NOWAIT);
+		if (xa_is_err(old)) {
+			error = xa_err(old);
+			break;
+		}
+		if (old != item) {
+			error = -EEXIST;
+			break;
+		}
 
 		if (shadowp) {
 			VM_BUG_ON(i);
@@ -161,7 +173,11 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 		VM_BUG_ON(error == -EEXIST);
 		set_page_private(page + i, 0UL);
 		while (i--) {
-			radix_tree_delete(&address_space->i_pages, idx + i);
+			void *old;
+
+			old = __xa_cmpxchg(&address_space->i_pages, idx + i,
+					   page + i, NULL, GFP_NOWAIT);
+			WARN_ON_ONCE(old != page + i);
 			set_page_private(page + i, 0UL);
 		}
 		ClearPageSwapCache(page);
@@ -171,7 +187,6 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 
 	return error;
 }
-
 int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp_mask)
 {
 	int error;
@@ -198,23 +213,24 @@ void __delete_from_swap_cache(struct page *page, void *shadow)
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 	VM_BUG_ON_PAGE(PageWriteback(page), page);
-	VM_BUG_ON(shadow && !radix_tree_exceptional_entry(shadow));
+	VM_BUG_ON(shadow && !xa_is_value(shadow));
 
 	entry.val = page_private(page);
 	address_space = swap_address_space(entry);
 	idx = swp_offset(entry);
 	for (i = 0; i < nr; i++) {
-		void *item;
-		void __rcu **slot;
-		struct radix_tree_node *node;
+		void *old;
 
-		item = __radix_tree_lookup(&address_space->i_pages,
-					   idx + i, &node, &slot);
-		if (WARN_ON_ONCE(item != page + i))
+		/*
+		 * Restore an MGLRU shadow only while this slot still points
+		 * at the page being removed. The XArray compare-and-exchange
+		 * handles both value-entry replacement and deletion.
+		 */
+		old = __xa_cmpxchg(&address_space->i_pages, idx + i,
+				   page + i, shadow, GFP_NOWAIT);
+		if (WARN_ON_ONCE(old != page + i))
 			continue;
 
-		__radix_tree_replace(&address_space->i_pages,
-				     node, slot, shadow, NULL);
 		set_page_private(page + i, 0);
 	}
 	ClearPageSwapCache(page);
@@ -222,7 +238,6 @@ void __delete_from_swap_cache(struct page *page, void *shadow)
 	__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, -nr);
 	ADD_CACHE_INFO(del_total, nr);
 }
-
 /**
  * add_to_swap - allocate swap space for a page
  * @page: page we want to move to swap
