@@ -420,10 +420,10 @@ static unsigned long damon_pa_pageout(struct damon_region *r, struct damos *s,
 			NR_ISOLATED_ANON + page_is_file_cache(page),
 			hpage_nr_pages(page));
 		if (PageUnevictable(page)) {
+			putback_lru_page(page);
 			mod_node_page_state(page_pgdat(page),
 				NR_ISOLATED_ANON + page_is_file_cache(page),
 				-hpage_nr_pages(page));
-			putback_lru_page(page);
 		} else {
 			list_add(&page->lru, &page_list);
 		}
