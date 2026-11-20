@@ -1495,21 +1495,41 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
 			void *buf, int len, int write);
 
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+/*
+ * The VMA sequence counter deliberately uses raw seqcount ordering without
+ * seqcount_t's lockdep metadata. Keep it a fixed-width field so it fits in
+ * the Android KABI reserve in both production and debug configurations.
+ */
+static inline unsigned int vm_seq_read_begin(struct vm_area_struct *vma)
+{
+	unsigned int seq = READ_ONCE(vma->vm_sequence);
+
+	smp_rmb();
+	return seq;
+}
+
+static inline bool vm_seq_read_retry(struct vm_area_struct *vma,
+				     unsigned int start)
+{
+	smp_rmb();
+	return READ_ONCE(vma->vm_sequence) != start;
+}
+
 static inline void vm_write_begin(struct vm_area_struct *vma)
 {
-	/*
-	 * SPF readers never spin on an odd sequence value, so writers
-	 * do not need the non-raw seqcount helper's preemption handling.
-	 */
-	raw_write_seqcount_begin(&vma->vm_sequence);
+	WRITE_ONCE(vma->vm_sequence, READ_ONCE(vma->vm_sequence) + 1);
+	smp_wmb();
 }
+
 static inline void vm_write_end(struct vm_area_struct *vma)
 {
-	raw_write_seqcount_end(&vma->vm_sequence);
+	smp_wmb();
+	WRITE_ONCE(vma->vm_sequence, READ_ONCE(vma->vm_sequence) + 1);
 }
+
 static inline bool vm_write_is_active(struct vm_area_struct *vma)
 {
-	return READ_ONCE(vma->vm_sequence.sequence) & 1;
+	return READ_ONCE(vma->vm_sequence) & 1;
 }
 #else
 static inline void vm_write_begin(struct vm_area_struct *vma) { }
