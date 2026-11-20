@@ -3408,15 +3408,6 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 			VM_BUG_ON_VMA(faulted_in_anon_vma, new_vma);
 			*vmap = vma = new_vma;
 		}
-
-		/*
-		 * __vma_merge() has completed its own sequence-protected
-		 * metadata update. Keep the destination unavailable to SPF
-		 * while move_page_tables() transfers entries, just as in the
-		 * newly allocated VMA path below. move_vma() closes this
-		 * sequence on every completed move path.
-		 */
-		vm_write_begin(new_vma);
 		*need_rmap_locks = (new_vma->vm_pgoff <= vma->vm_pgoff);
 	} else {
 		new_vma = vm_area_dup(vma);
