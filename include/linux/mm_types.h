@@ -344,7 +344,7 @@ struct vm_area_struct {
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	ANDROID_KABI_USE(1, struct {
-		seqcount_t vm_sequence;
+		unsigned int vm_sequence;
 		atomic_t vm_ref_count;	/* see get_vma(), put_vma() */
 	});
 #else
