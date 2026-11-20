@@ -1163,7 +1163,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			goto keep_locked;
 
 		/* page_update_gen() tried to promote this page? */
-		if (lru_gen_enabled() && !force_reclaim &&
+		if (lru_gen_enabled() && !lru_gen_switching() && !force_reclaim &&
 		    page_mapped(page) && PageReferenced(page))
 			goto keep_locked;
 
@@ -2831,6 +2831,7 @@ DEFINE_STATIC_KEY_ARRAY_TRUE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #else
 DEFINE_STATIC_KEY_ARRAY_FALSE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #endif
+DEFINE_STATIC_KEY_FALSE(lru_switch);
 
 /******************************************************************************
  *                          shorthand helpers
@@ -4922,6 +4923,8 @@ static void lru_gen_change_state(bool enable)
 	if (enable == lru_gen_enabled())
 		goto unlock;
 
+	static_branch_enable_cpuslocked(&lru_switch);
+
 	if (enable)
 		static_branch_enable_cpuslocked(&lru_gen_caps[LRU_GEN_CORE]);
 	else
@@ -4961,6 +4964,9 @@ static void lru_gen_change_state(bool enable)
 
 		cond_resched();
 	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+
+	static_branch_disable_cpuslocked(&lru_switch);
+
 unlock:
 	mutex_unlock(&state_mutex);
 	put_online_mems();
@@ -5489,9 +5495,11 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	struct blk_plug plug;
 	bool scan_adjusted;
 
-	if (lru_gen_enabled()) {
+	if (lru_gen_enabled() || lru_gen_switching()) {
 		lru_gen_shrink_lruvec(lruvec, sc);
-		return;
+
+		if (!lru_gen_switching())
+			return;
 	}
 
 	get_scan_count(lruvec, memcg, sc, nr, lru_pages);
@@ -6020,7 +6028,7 @@ static void snapshot_refaults(struct mem_cgroup *root_memcg, pg_data_t *pgdat)
 {
 	struct mem_cgroup *memcg;
 
-	if (lru_gen_enabled())
+	if (lru_gen_enabled() && !lru_gen_switching())
 		return;
 
 	memcg = mem_cgroup_iter(root_memcg, NULL, NULL);
@@ -6385,9 +6393,11 @@ static void age_active_anon(struct pglist_data *pgdat,
 {
 	struct mem_cgroup *memcg;
 
-	if (lru_gen_enabled()) {
+	if (lru_gen_enabled() || lru_gen_switching()) {
 		lru_gen_age_node(pgdat, sc);
-		return;
+
+		if (!lru_gen_switching())
+			return;
 	}
 
 	if (!total_swap_pages)
