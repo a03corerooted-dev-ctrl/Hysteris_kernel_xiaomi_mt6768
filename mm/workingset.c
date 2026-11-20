@@ -304,8 +304,15 @@ void lru_gen_refault(struct page *page, void *shadow)
 	 * 2. For pages accessed through file descriptors, numbers of accesses
 	 *    might have been beyond the limit.
 	 */
-	if (lru_gen_in_fault() || refs + workingset == BIT(LRU_REFS_WIDTH)) {
-		SetPageWorkingset(page);
+	if (lru_gen_in_fault() || refs >= BIT(LRU_REFS_WIDTH) - 1) {
+		unsigned long old_flags, new_flags;
+
+		do {
+			new_flags = old_flags = READ_ONCE(page->flags);
+			new_flags |= LRU_REFS_MASK | BIT(PG_workingset);
+		} while (new_flags != old_flags &&
+			 cmpxchg(&page->flags, old_flags, new_flags) != old_flags);
+
 		mod_lruvec_state(lruvec, WORKINGSET_RESTORE, delta);
 	}
 unlock:
