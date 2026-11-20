@@ -46,7 +46,12 @@ jobs:
       - name: Install toolchain and build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential clang-14 flex gcc-aarch64-linux-gnu libelf-dev libssl-dev lld-14 llvm-14 python3
+          sudo apt-get install -y bc bison build-essential clang-14 flex gcc-aarch64-linux-gnu libelf-dev libssl-dev lld-14 llvm-14 llvm-14-tools python3
+          # Linux 4.19's LTO scripts invoke the unversioned llvm-nm name.
+          LLVM_NM="$(command -v llvm-nm-14 || command -v llvm-nm)"
+          test -n "$LLVM_NM"
+          sudo ln -sf "$LLVM_NM" /usr/local/bin/llvm-nm
+          llvm-nm --version
 
       - name: Configure MT6768 defconfig
         run: |
