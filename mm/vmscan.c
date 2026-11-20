@@ -3164,9 +3164,9 @@ static long get_nr_evictable(struct lruvec *lruvec, unsigned long max_seq,
 	 * from the producer's POV, the aging only cares about the upper bound
 	 * of hot pages, i.e., 1/MIN_NR_GENS.
 	 */
-	if (min_seq[LRU_GEN_FILE] + MIN_NR_GENS > max_seq)
+	if (min_seq[!can_swap] + MIN_NR_GENS > max_seq)
 		*need_aging = true;
-	else if (min_seq[LRU_GEN_FILE] + MIN_NR_GENS < max_seq)
+	else if (min_seq[!can_swap] + MIN_NR_GENS < max_seq)
 		*need_aging = false;
 	else if (young * MIN_NR_GENS > total)
 		*need_aging = true;
@@ -3484,7 +3484,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	if (try_to_inc_min_seq(lruvec, swappiness))
 		scanned++;
 
-	if (get_nr_gens(lruvec, LRU_GEN_FILE) == MIN_NR_GENS)
+	if (get_nr_gens(lruvec, !swappiness) == MIN_NR_GENS)
 		scanned = 0;
 
 	spin_unlock_irq(&pgdat->lru_lock);
@@ -3527,9 +3527,11 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	return scanned;
 }
 
-static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool can_swap)
+static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc,
+			      bool can_swap, unsigned long reclaimed)
 {
 	bool need_aging;
+	int priority;
 	long nr_to_scan;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
@@ -3539,12 +3541,14 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	if (!nr_to_scan)
 		return 0;
 
-	/* reset the priority if the target has been met */
-	nr_to_scan >>= sc->nr_reclaimed < sc->nr_to_reclaim ? sc->priority : DEF_PRIORITY;
-
 	if (!mem_cgroup_online(memcg))
-		nr_to_scan++;
+		priority = 0;
+	else if (sc->nr_reclaimed - reclaimed >= sc->nr_to_reclaim)
+		priority = DEF_PRIORITY;
+	else
+		priority = sc->priority;
 
+	nr_to_scan >>= priority;
 	if (!nr_to_scan)
 		return 0;
 
@@ -3555,15 +3559,17 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	if (current_is_kswapd())
 		return 0;
 
-	inc_max_seq(lruvec, max_seq);
+	if (priority != DEF_PRIORITY)
+		inc_max_seq(lruvec, max_seq);
 
-	return nr_to_scan;
+	return min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
 }
 
 static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 {
 	struct blk_plug plug;
 	long scanned = 0;
+	unsigned long reclaimed = sc->nr_reclaimed;
 
 	lru_add_drain();
 
@@ -3581,7 +3587,7 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		else
 			swappiness = 0;
 
-		nr_to_scan = get_nr_to_scan(lruvec, sc, swappiness);
+		nr_to_scan = get_nr_to_scan(lruvec, sc, swappiness, reclaimed);
 		if (!nr_to_scan)
 			break;
 
