@@ -2739,8 +2739,18 @@ static void unmap_region(struct mm_struct *mm,
 	}
 
 	free_pgtables(&tlb, vma, prev ? prev->vm_end : FIRST_USER_ADDRESS,
-				 next ? next->vm_start : USER_PGTABLES_CEILING);
+			 next ? next->vm_start : USER_PGTABLES_CEILING);
 	tlb_finish_mmu(&tlb, start, end);
+
+	/*
+	 * munmap keeps each detached VMA unavailable to speculative
+	 * faults until its PTEs and page-table pages have been removed
+	 * and the TLB gather has completed. Unpublished VMAs on the
+	 * mmap error path have no outstanding sequence writer.
+	 */
+	for (cur_vma = vma; cur_vma; cur_vma = cur_vma->vm_next)
+		if (vm_write_is_active(cur_vma))
+			vm_write_end(cur_vma);
 }
 
 /*
@@ -2760,14 +2770,12 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 		struct vm_area_struct *next = vma->vm_next;
 
 		/*
-		 * A speculative fault may still hold a reference to this VMA
-		 * after it leaves the RB tree. Bump the sequence around the
-		 * unlink so in-flight faults fall back before touching its
-		 * page tables.
+		 * A speculative fault may already hold a VMA reference.
+		 * Keep its sequence odd from RB-tree detach until unmap_region()
+		 * has removed the PTEs/page tables and completed the TLB gather.
 		 */
 		vm_write_begin(vma);
 		vma_rb_erase(vma, mm);
-		vm_write_end(vma);
 
 		mm->map_count--;
 		tail_vma = vma;
