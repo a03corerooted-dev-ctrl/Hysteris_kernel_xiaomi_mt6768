@@ -4410,8 +4410,16 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 				       flags & FAULT_FLAG_REMOTE))
 		goto out_segv;
 
-	if (unlikely(!(vmf.vma_flags & (VM_READ | VM_EXEC | VM_WRITE))))
+	/*
+	 * ARM64 passes FAULT_FLAG_INSTRUCTION for instruction aborts.
+	 * Do not treat a readable VMA as executable.
+	 */
+	if (flags & FAULT_FLAG_INSTRUCTION) {
+		if (!(vmf.vma_flags & VM_EXEC))
+			goto out_segv;
+	} else if (unlikely(!(vmf.vma_flags & (VM_READ | VM_WRITE | VM_EXEC)))) {
 		goto out_segv;
+	}
 
 #ifdef CONFIG_NUMA
 	/*
