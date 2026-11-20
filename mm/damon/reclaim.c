@@ -13,14 +13,14 @@
  *   etc. were later split out of the older monolithic linux/kernel.h into
  *   their own header; here they're still declared via kernel.h, included
  *   below instead).
- * - This module's only DAMOS action is DAMOS_PAGEOUT, which is fully
- *   functional on this kernel via reclaim_pages_from_list() (see
- *   mm/damon/paddr.c's damon_pa_pageout() - CONFIG_PROCESS_RECLAIM=y).
- *   No other changes were needed; everything else here (module_param*,
- *   damon_new_scheme(), damos_new_quota_goal(), damos_new_filter(), the
- *   PSI-based quota goal, damon_set_region_biggest_system_ram_default())
- *   is unmodified mainline, using APIs already confirmed working in
- *   core.c (stage 1) and paddr.c (stage 4).
+ * - DAMOS_PAGEOUT is backed by Hysteris's
+ *   damon_reclaim_pages_from_list() helper in mm/vmscan.c.  Unlike the
+ *   reference vendor tree, this helper groups isolated pages by pgdat and
+ *   explicitly balances per-node isolated-page counters.
+ * - <linux/kstrtox.h> is absent in this 4.19 tree; the legacy
+ *   linux/kernel.h provides the required kstrtoul()/kstrtobool() APIs.
+ *   The DAMON quota, PSI goal, and module-parameter logic is otherwise
+ *   retained from the upstream DAMON policy implementation.
  */
 #include <linux/damon.h>
 #include <linux/kernel.h>
