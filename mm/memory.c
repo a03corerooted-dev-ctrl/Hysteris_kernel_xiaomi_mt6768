@@ -3254,6 +3254,18 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		return VM_FAULT_SIGBUS;
 
 	/*
+	 * The speculative path is allowed to install only the shared zero
+	 * page. Keep this guard here as well as in
+	 * __handle_speculative_fault(): if zero-page mappings are forbidden,
+	 * never let a speculative fault fall through to anon_vma_prepare()
+	 * or private-page allocation without mmap_lock.
+	 */
+	if ((vmf->flags & FAULT_FLAG_SPECULATIVE) &&
+	    ((vmf->flags & FAULT_FLAG_WRITE) ||
+	     mm_forbids_zeropage(vma->vm_mm)))
+		return VM_FAULT_RETRY;
+
+	/*
 	 * Use pte_alloc() instead of pte_alloc_map().  We can't run
 	 * pte_offset_map() on pmds where a huge pmd might be created
 	 * from a different thread.
