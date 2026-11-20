@@ -49,7 +49,7 @@ extern void put_vma(struct vm_area_struct *vma);
 static inline bool vma_has_changed(struct vm_fault *vmf)
 {
 	int ret = RB_EMPTY_NODE(&vmf->vma->vm_rb);
-	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
+	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence);
 
 	/*
 	 * Matches both the wmb in write_seqlock_{begin,end}() and
