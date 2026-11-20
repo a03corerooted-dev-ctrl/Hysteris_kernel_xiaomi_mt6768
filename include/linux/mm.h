@@ -1517,11 +1517,19 @@ static inline void vm_write_end(struct vm_area_struct *vma)
 }
 static inline bool vma_has_changed(struct vm_fault *vmf)
 {
-	bool removed = RB_EMPTY_NODE(&vmf->vma->vm_rb);
-	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
+	struct vm_area_struct *vma = vmf->vma;
+	unsigned int seq = raw_read_seqcount(&vma->vm_sequence);
 
-	smp_rmb();
-	return removed || seq != vmf->sequence;
+	/*
+	 * vm_rb is protected by mm_rb_lock and can be rebalanced by an
+	 * unrelated VMA update. Use the separately published detach state
+	 * instead of inspecting rb_parent_color outside that lock.
+	 */
+	if ((seq & 1) || seq != vmf->sequence)
+		return true;
+
+	return READ_ONCE(vma->vm_detached) ||
+		read_seqcount_retry(&vma->vm_sequence, seq);
 }
 #else
 static inline void vm_write_begin(struct vm_area_struct *vma) { }
