@@ -412,11 +412,15 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 
 		/*
 		 * Hide vma from rmap and truncate_pagecache before freeing
-		 * pgtables
+		 * pgtables. munmap keeps the sequence odd from RB-tree
+		 * detach through the final page-table flush. Other callers
+		 * start a short sequence update for anon_vma teardown.
 		 */
-		vm_write_begin(vma);
+		if (!vm_write_is_active(vma))
+			vm_write_begin(vma);
 		unlink_anon_vmas(vma);
-		vm_write_end(vma);
+		if (READ_ONCE(vma->vm_sequence.sequence) & 1)
+			vm_write_end(vma);
 		unlink_file_vma(vma);
 
 		if (is_vm_hugetlb_page(vma)) {
@@ -430,9 +434,11 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			       && !is_vm_hugetlb_page(next)) {
 				vma = next;
 				next = vma->vm_next;
-				vm_write_begin(vma);
+				if (!vm_write_is_active(vma))
+					vm_write_begin(vma);
 				unlink_anon_vmas(vma);
-				vm_write_end(vma);
+				if (READ_ONCE(vma->vm_sequence.sequence) & 1)
+					vm_write_end(vma);
 				unlink_file_vma(vma);
 			}
 			free_pgd_range(tlb, addr, vma->vm_end,
