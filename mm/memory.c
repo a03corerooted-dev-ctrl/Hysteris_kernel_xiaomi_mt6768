@@ -4572,7 +4572,7 @@ out_walk:
 
 out_segv:
 	/* A concurrent VMA change must be retried, not reported as SIGSEGV. */
-	if (read_seqcount_retry(&vmf.vma->vm_sequence, seq))
+	if (vm_seq_read_retry(vmf.vma, seq))
 		return VM_FAULT_RETRY;
 	put_vma(vmf.vma);
 	*vma = NULL;
