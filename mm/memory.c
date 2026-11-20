@@ -4326,14 +4326,13 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 {
 	struct vm_fault vmf = {
 		.address = address,
-		.pgoff = linear_page_index(vma, address),
 		.vma = vma,
-		.gfp_mask = __get_fault_gfp_mask(vma),
 		.flags = flags & ~(FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE),
 	};
 	pgd_t *pgd, pgdval;
 	p4d_t *p4d, p4dval;
 	pud_t pudval;
+	unsigned long vm_start, vm_end;
 	unsigned int seq;
 	vm_fault_t ret;
 	bool uffd_missing_sigbus = false;
@@ -4346,6 +4345,13 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	vmf.sequence = seq;
 	vmf.vma_flags = READ_ONCE(vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vma->vm_page_prot);
+	vm_start = READ_ONCE(vma->vm_start);
+	vm_end = READ_ONCE(vma->vm_end);
+	if (address < vm_start || address >= vm_end)
+		return VM_FAULT_RETRY;
+	vmf.pgoff = READ_ONCE(vma->vm_pgoff) +
+		((address - vm_start) >> PAGE_SHIFT);
+	vmf.gfp_mask = __get_fault_gfp_mask(vma);
 
 	/*
 	 * get_vma() pins the object, but a VMA can be detached just before
@@ -4368,8 +4374,11 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 		if (!uffd_missing_sigbus)
 			return VM_FAULT_RETRY;
 		/* No anon_vma means the PTE is missing. */
-		if (!READ_ONCE(vma->anon_vma))
+		if (!READ_ONCE(vma->anon_vma)) {
+			if (vma_has_changed(&vmf))
+				return VM_FAULT_RETRY;
 			return VM_FAULT_SIGBUS;
+		}
 	}
 #endif
 
@@ -4381,13 +4390,21 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 
 	if (!arch_vma_access_permitted(vma, flags & FAULT_FLAG_WRITE,
 				       flags & FAULT_FLAG_INSTRUCTION,
-				       flags & FAULT_FLAG_REMOTE))
+				       flags & FAULT_FLAG_REMOTE)) {
+		if (vma_has_changed(&vmf))
+			return VM_FAULT_RETRY;
 		return VM_FAULT_SIGSEGV;
+	}
 
 	if (flags & FAULT_FLAG_WRITE) {
-		if (!(vmf.vma_flags & VM_WRITE))
+		if (!(vmf.vma_flags & VM_WRITE)) {
+			if (vma_has_changed(&vmf))
+				return VM_FAULT_RETRY;
 			return VM_FAULT_SIGSEGV;
+		}
 	} else if (!(vmf.vma_flags & (VM_READ | VM_EXEC | VM_WRITE))) {
+		if (vma_has_changed(&vmf))
+			return VM_FAULT_RETRY;
 		return VM_FAULT_SIGSEGV;
 	}
 
