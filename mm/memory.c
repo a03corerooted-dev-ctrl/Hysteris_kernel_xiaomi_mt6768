@@ -2211,7 +2211,13 @@ static bool pte_spinlock(struct vm_fault *vmf)
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, &pmdval);
 	if (!spin_trylock(vmf->ptl))
 		goto out;
-	if (vma_has_changed(vmf)) {
+	/*
+	 * The page table can be replaced independently of VMA metadata
+	 * (for example during a THP split/collapse). Recheck the PMD while
+	 * holding the lock derived from the original table.
+	 */
+	if (vma_has_changed(vmf) ||
+	    !pmd_same(READ_ONCE(*vmf->pmd), vmf->orig_pmd)) {
 		spin_unlock(vmf->ptl);
 		goto out;
 	}
@@ -2242,7 +2248,13 @@ static bool __pte_map_lock_speculative(struct vm_fault *vmf,
 		pte_unmap(pte);
 		goto out;
 	}
-	if (vma_has_changed(vmf)) {
+	/*
+	 * A concurrent page-table replacement need not change VMA metadata.
+	 * Verify that the lock and PTE mapping still belong to the original
+	 * PMD before exposing them to the fault handler.
+	 */
+	if (vma_has_changed(vmf) ||
+	    !pmd_same(READ_ONCE(*vmf->pmd), vmf->orig_pmd)) {
 		pte_unmap_unlock(pte, ptl);
 		goto out;
 	}
