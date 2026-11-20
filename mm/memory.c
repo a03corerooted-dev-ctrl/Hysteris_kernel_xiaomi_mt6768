@@ -4380,7 +4380,8 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	pgd_t *pgd, pgdval;
 	p4d_t *p4d, p4dval;
 	pud_t pudval;
-	int seq, ret = VM_FAULT_RETRY;
+	unsigned int seq;
+	int ret = VM_FAULT_RETRY;
 
 	*vma = get_vma(mm, address);
 	if (!*vma)
@@ -4392,7 +4393,7 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	flags |= FAULT_FLAG_SPECULATIVE;
 
 	/* rmb <-> seqlock and vma_rb_erase(). */
-	seq = raw_read_seqcount(&vmf.vma->vm_sequence);
+	seq = vm_seq_read_begin(vmf.vma);
 	if (seq & 1)
 		return VM_FAULT_RETRY;
 	vmf.sequence = seq;
@@ -4549,7 +4550,7 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	 * the speculative PTE path. On change, keep the reference for the
 	 * locked fallback to validate with can_reuse_spf_vma().
 	 */
-	if (read_seqcount_retry(&vmf.vma->vm_sequence, seq))
+	if (vm_seq_read_retry(vmf.vma, seq))
 		return VM_FAULT_RETRY;
 
 	mem_cgroup_enter_user_fault();
