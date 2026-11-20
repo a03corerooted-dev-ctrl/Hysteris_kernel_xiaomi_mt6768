@@ -2309,9 +2309,9 @@ static struct vm_area_struct *__find_vma(struct mm_struct *mm,
 
 		tmp = rb_entry(rb_node, struct vm_area_struct, vm_rb);
 
-		if (tmp->vm_end > addr) {
+		if (READ_ONCE(tmp->vm_end) > addr) {
 			vma = tmp;
-			if (tmp->vm_start <= addr)
+			if (READ_ONCE(tmp->vm_start) <= addr)
 				break;
 			rb_node = rb_node->rb_left;
 		} else
