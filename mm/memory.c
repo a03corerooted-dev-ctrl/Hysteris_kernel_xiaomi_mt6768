@@ -4368,14 +4368,14 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	 * Do not call vm_ops callbacks without mmap_lock. This also excludes
 	 * hugetlbfs and mappings with custom fault handlers.
 	 */
-	if (vmf.vma->vm_ops)
+	if (READ_ONCE(vmf.vma->vm_ops))
 		return VM_FAULT_RETRY;
 
 	/*
 	 * anon_vma must already exist: anon_vma_prepare() requires mmap_lock
 	 * and may walk neighboring VMAs.
 	 */
-	if (unlikely(!vmf.vma->anon_vma))
+	if (unlikely(!READ_ONCE(vmf.vma->anon_vma)))
 		return VM_FAULT_RETRY;
 
 	vmf.vma_flags = READ_ONCE(vmf.vma->vm_flags);
@@ -4395,7 +4395,8 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	 * are left to the normal mmap_lock-protected fault path.
 	 */
 	if ((vmf.vma_flags & (VM_SHARED | VM_UFFD_MISSING |
-			      VM_GROWSDOWN | VM_GROWSUP)) ||
+			      VM_GROWSDOWN | VM_GROWSUP | VM_IO |
+			      VM_PFNMAP | VM_MIXEDMAP | VM_HUGETLB)) ||
 	    READ_ONCE(vmf.vma->vm_file))
 		return VM_FAULT_RETRY;
 
@@ -4412,16 +4413,11 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 		goto out_segv;
 
 #ifdef CONFIG_NUMA
-	{
-		struct mempolicy *pol;
-
-		/* MPOL_INTERLEAVE has additional placement work in fault context. */
-		pol = __get_vma_policy(vmf.vma, address);
-		if (!pol)
-			pol = get_task_policy(current);
-		if (pol && pol->mode == MPOL_INTERLEAVE)
-			return VM_FAULT_RETRY;
-	}
+	/*
+	 * This minimal 4.19 port does not speculate NUMA policy placement.
+	 * Keep all NUMA configurations on the serialized fault path.
+	 */
+	return VM_FAULT_RETRY;
 #endif
 
 	/*
