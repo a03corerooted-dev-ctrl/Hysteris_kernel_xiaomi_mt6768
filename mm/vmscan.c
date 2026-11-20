@@ -15,6 +15,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mm.h>
+#include <linux/mmu_notifier.h>
 #include <linux/sched/mm.h>
 #include <linux/module.h>
 #include <linux/gfp.h>
@@ -3610,7 +3611,7 @@ restart:
 		if (WARN_ON_ONCE(pte_devmap(pte[i]) || pte_special(pte[i])))
 			continue;
 
-		if (!pte_young(pte[i])) {
+		if (!pte_young(pte[i]) && !mm_has_notifiers(walk->mm)) {
 			priv->mm_stats[MM_PTE_OLD]++;
 			continue;
 		}
@@ -3626,7 +3627,7 @@ restart:
 		if (page_memcg_rcu(page) != memcg)
 			continue;
 
-		if (!ptep_test_and_clear_young(walk->vma, addr, pte + i))
+		if (!ptep_clear_young_notify(walk->vma, addr, pte + i))
 			continue;
 
 		young++;
@@ -3701,7 +3702,8 @@ static void walk_pmd_range_locked(pud_t *pud, unsigned long next, struct vm_area
 			goto next;
 
 		if (!pmd_trans_huge(pmd[i])) {
-			if (IS_ENABLED(CONFIG_ARCH_HAS_NONLEAF_PMD_YOUNG) &&
+			if (!walk->force_scan && !mm_has_notifiers(walk->mm) &&
+			    IS_ENABLED(CONFIG_ARCH_HAS_NONLEAF_PMD_YOUNG) &&
 			    get_cap(LRU_GEN_NONLEAF_YOUNG))
 				pmdp_test_and_clear_young(vma, addr, pmd + i);
 			goto next;
@@ -3719,7 +3721,7 @@ static void walk_pmd_range_locked(pud_t *pud, unsigned long next, struct vm_area
 		if (page_memcg_rcu(page) != memcg)
 			goto next;
 
-		if (!pmdp_test_and_clear_young(vma, addr, pmd + i))
+		if (!pmdp_clear_young_notify(vma, addr, pmd + i))
 			goto next;
 
 		priv->mm_stats[MM_PTE_YOUNG]++;
@@ -3796,7 +3798,7 @@ restart:
 			if (is_huge_zero_pmd(val))
 				continue;
 
-			if (!pmd_young(val)) {
+			if (!pmd_young(val) && !mm_has_notifiers(walk->mm)) {
 				priv->mm_stats[MM_PTE_OLD]++;
 				continue;
 			}
@@ -3812,7 +3814,8 @@ restart:
 
 #ifdef CONFIG_ARCH_HAS_NONLEAF_PMD_YOUNG
 		if (get_cap(LRU_GEN_NONLEAF_YOUNG)) {
-			if (!pmd_young(val))
+			if (!walk->force_scan && !mm_has_notifiers(walk->mm) &&
+			    !pmd_young(val))
 				continue;
 
 			walk_pmd_range_locked(pud, addr, vma, walk, &pos);
@@ -4272,7 +4275,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	unsigned long addr;
 	struct page *page;
 	struct lru_gen_mm_walk *walk;
-	int young = 0;
+	int young = 1;
 	unsigned long bitmap[BITS_TO_LONGS(MIN_LRU_BATCH)] = {};
 	struct mem_cgroup *memcg;
 	struct pglist_data *pgdat = page_pgdat(pvmw->page);
@@ -4282,8 +4285,14 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	lockdep_assert_held(pvmw->ptl);
 	VM_BUG_ON_PAGE(PageLRU(pvmw->page), pvmw->page);
 
+	if (!ptep_clear_young_notify(pvmw->vma, pvmw->address, pvmw->pte))
+		return false;
+
 	if (spin_is_contended(pvmw->ptl))
-		return;
+		return true;
+
+	if (pvmw->vma->vm_flags & VM_SPECIAL)
+		return true;
 
 	memcg = get_mem_cgroup_from_page(pvmw->page);
 	lruvec = mem_cgroup_lruvec(pgdat, memcg);
@@ -4303,6 +4312,11 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	}
 
 	pte = pvmw->pte - (pvmw->address - start) / PAGE_SIZE;
+
+	if (end - start == PAGE_SIZE) {
+		mem_cgroup_put(memcg);
+		return true;
+	}
 
 	rcu_read_lock();
 	arch_enter_lazy_mmu_mode();
@@ -4332,7 +4346,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 		if (page_memcg_rcu(page) != memcg)
 			continue;
 
-		if (!ptep_test_and_clear_young(pvmw->vma, addr, pte + i))
+		if (!ptep_clear_young_notify(pvmw->vma, addr, pte + i))
 			continue;
 
 		young++;
@@ -4362,13 +4376,13 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 		for_each_set_bit(i, bitmap, MIN_LRU_BATCH)
 			activate_page(pte_page(pte[i]));
 		mem_cgroup_put(memcg);
-		return;
+		return true;
 	}
 
 	/* page_update_gen() requires stable page_memcg() */
 	if (!mem_cgroup_trylock_pages(memcg)) {
 		mem_cgroup_put(memcg);
-		return;
+		return true;
 	}
 
 	if (!walk) {
@@ -4396,6 +4410,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 
 	mem_cgroup_unlock_pages();
 	mem_cgroup_put(memcg);
+	return true;
 }
 
 /******************************************************************************
