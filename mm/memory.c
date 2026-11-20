@@ -1585,7 +1585,9 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
 	if (!(vma->vm_flags & VM_MIXEDMAP)) {
 		BUG_ON(mmap_read_trylock(vma->vm_mm));
 		BUG_ON(vma->vm_flags & VM_PFNMAP);
-		vma->vm_flags |= VM_MIXEDMAP;
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, vma->vm_flags | VM_MIXEDMAP);
+		vm_write_end(vma);
 	}
 	return insert_page(vma, addr, page, vma->vm_page_prot);
 }
@@ -1935,17 +1937,25 @@ int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
 	 * un-COW'ed pages by matching them up with "vma->vm_pgoff".
 	 * See vm_normal_page() for details.
 	 */
+	vm_write_begin(vma);
 	if (is_cow_mapping(vma->vm_flags)) {
-		if (addr != vma->vm_start || end != vma->vm_end)
+		if (addr != vma->vm_start || end != vma->vm_end) {
+			vm_write_end(vma);
 			return -EINVAL;
-		vma->vm_pgoff = pfn;
+		}
+		WRITE_ONCE(vma->vm_pgoff, pfn);
 	}
 
 	err = track_pfn_remap(vma, &prot, remap_pfn, addr, PAGE_ALIGN(size));
-	if (err)
+	if (err) {
+		vm_write_end(vma);
 		return -EINVAL;
+	}
 
-	vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
+	WRITE_ONCE(vma->vm_flags,
+		   vma->vm_flags | VM_IO | VM_PFNMAP |
+		   VM_DONTEXPAND | VM_DONTDUMP);
+	vm_write_end(vma);
 
 	BUG_ON(addr >= end);
 	pfn -= addr >> PAGE_SHIFT;
