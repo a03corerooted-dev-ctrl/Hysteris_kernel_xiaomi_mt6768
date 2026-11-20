@@ -2867,10 +2867,6 @@ static int page_lru_refs(struct page *page)
 	       ((flags & LRU_REFS_MASK) >> LRU_REFS_PGOFF) + 1 : 0;
 }
 
-static int page_lru_tier(struct page *page)
-{
-	return lru_tier_from_refs(page_lru_refs(page));
-}
 
 static bool get_cap(int cap)
 {
