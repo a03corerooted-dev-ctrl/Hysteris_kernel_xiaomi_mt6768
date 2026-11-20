@@ -4461,8 +4461,8 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	if (pud_none(pudval) || unlikely(pud_bad(pudval)))
 		goto out_walk;
 
-	/* Huge pages at PUD level are not supported. */
-	if (unlikely(pud_trans_huge(pudval)))
+	/* Huge and device-mapped PUD entries stay on the serialized path. */
+	if (unlikely(pud_trans_huge(pudval) || pud_devmap(pudval)))
 		goto out_walk;
 
 	vmf.pmd = pmd_offset(vmf.pud, address);
