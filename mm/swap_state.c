@@ -146,12 +146,13 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry,
 
 		/*
 		 * Compare-and-exchange preserves the shadow only if the slot
-		 * still contains the value observed above. __xa_cmpxchg()
-		 * expects xa_lock to be held; GFP_NOWAIT uses the radix-tree
-		 * nodes preloaded by the caller without sleeping under the lock.
+		 * still contains the value observed above. This path holds
+		 * xa_lock_irq(), so do not allow __xa_cmpxchg() to drop the
+		 * lock and sleep while allocating an XArray node. Preserve the
+		 * caller's allocation constraints except direct reclaim.
 		 */
 		old = __xa_cmpxchg(&address_space->i_pages, idx + i, item,
-				   page + i, gfp_mask);
+				   page + i, gfp_mask & ~__GFP_DIRECT_RECLAIM);
 		if (xa_is_err(old)) {
 			error = xa_err(old);
 			break;

@@ -1,20 +1,8 @@
 name: SPF 4.19 enabled build
 
 on:
-  push:
-    branches:
-      - test/spf-419-ci-enabled
-      - experimental/mglru
-    paths:
-      - '.github/workflows/spf-419-build.yml'
-      - 'arch/arm64/**'
-      - 'include/**'
-      - 'kernel/**'
-      - 'mm/**'
-      - 'fs/**'
-      - 'scripts/**'
-      - 'Makefile'
-      - 'Kbuild'
+  # Kernel-repository builds are manual-only. Validate from the dedicated
+  # NonGKI_Kernel_Build-K419 builder instead of launching kernel-repo runs.
   workflow_dispatch:
 
 permissions:
@@ -48,15 +36,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential clang-14 flex gcc-aarch64-linux-gnu libelf-dev libssl-dev lld-14 llvm-14 llvm-14-tools python3
-          # Linux 4.19's LTO scripts invoke the unversioned llvm-nm name.
-          LLVM_NM="$(command -v llvm-nm-14 || command -v llvm-nm)"
-          LLVM_AR="$(command -v llvm-ar-14 || command -v llvm-ar)"
-          test -n "$LLVM_NM"
-          test -n "$LLVM_AR"
-          sudo ln -sf "$LLVM_NM" /usr/local/bin/llvm-nm
-          sudo ln -sf "$LLVM_AR" /usr/local/bin/llvm-ar
+          # Linux 4.19's LTO scripts invoke unversioned LLVM binutils.
+          for tool in llvm-nm llvm-ar llvm-ranlib; do
+            TOOL_PATH="$(command -v "${tool}-14" || command -v "$tool")"
+            test -n "$TOOL_PATH"
+            sudo ln -sf "$TOOL_PATH" "/usr/local/bin/$tool"
+          done
           llvm-nm --version
           llvm-ar --version
+          llvm-ranlib --version
 
       - name: Configure MT6768 defconfig
         run: |
