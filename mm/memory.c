@@ -4355,7 +4355,7 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 			       struct vm_area_struct **vma)
 {
 	struct vm_fault vmf = {
-		.address = address,
+		.address = address & PAGE_MASK,
 	};
 	pgd_t *pgd, pgdval;
 	p4d_t *p4d, p4dval;
