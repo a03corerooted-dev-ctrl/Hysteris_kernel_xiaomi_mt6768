@@ -3073,6 +3073,7 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	struct vm_area_struct *vma, *prev;
 	struct rb_node **rb_link, *rb_parent;
 	pgoff_t pgoff = addr >> PAGE_SHIFT;
+	bool vm_write_started = false;
 	int error;
 
 	/* Until we need other flags, refuse anything except VM_EXEC. */
@@ -3134,6 +3135,9 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	vma->vm_pgoff = pgoff;
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
+	/* Publish the new VMA only after starting its sequence. */
+	vm_write_begin(vma);
+	vm_write_started = true;
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 out:
 	perf_event_mmap(vma);
@@ -3141,7 +3145,9 @@ out:
 	mm->data_vm += len >> PAGE_SHIFT;
 	if (flags & VM_LOCKED)
 		mm->locked_vm += (len >> PAGE_SHIFT);
-	vm_write_begin(vma);
+	/* vma_merge() reaches out with an already-published VMA. */
+	if (!vm_write_started)
+		vm_write_begin(vma);
 	WRITE_ONCE(vma->vm_flags, vma->vm_flags | VM_SOFTDIRTY);
 	vm_write_end(vma);
 	return 0;
