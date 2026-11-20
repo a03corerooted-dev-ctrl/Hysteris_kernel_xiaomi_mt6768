@@ -112,7 +112,8 @@ void show_swap_cache_info(void)
  * __add_to_swap_cache resembles add_to_page_cache_locked on swapper_space,
  * but sets SwapCache flag and private instead of mapping and index.
  */
-int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
+int __add_to_swap_cache(struct page *page, swp_entry_t entry,
+			void **shadowp, gfp_t gfp_mask)
 {
 	int error = 0, i, nr = hpage_nr_pages(page);
 	struct address_space *address_space;
@@ -150,7 +151,7 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 		 * nodes preloaded by the caller without sleeping under the lock.
 		 */
 		old = __xa_cmpxchg(&address_space->i_pages, idx + i, item,
-				   page + i, GFP_NOWAIT);
+				   page + i, gfp_mask);
 		if (xa_is_err(old)) {
 			error = xa_err(old);
 			break;
@@ -189,14 +190,7 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
 }
 int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp_mask)
 {
-	int error;
-
-	error = radix_tree_maybe_preload_order(gfp_mask, compound_order(page));
-	if (!error) {
-		error = __add_to_swap_cache(page, entry, NULL);
-		radix_tree_preload_end();
-	}
-	return error;
+	return __add_to_swap_cache(page, entry, NULL, gfp_mask);
 }
 
 /*
@@ -456,18 +450,10 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		}
 
 		/*
-		 * call radix_tree_preload() while we can wait.
-		 */
-		err = radix_tree_maybe_preload(gfp_mask & GFP_RECLAIM_MASK);
-		if (err)
-			break;
-
-		/*
 		 * Swap entry may have been freed since our caller observed it.
 		 */
 		err = swapcache_prepare(entry);
 		if (err == -EEXIST) {
-			radix_tree_preload_end();
 			/*
 			 * We might race against get_swap_page() and stumble
 			 * across a SWAP_HAS_CACHE swap_map entry whose page
@@ -477,16 +463,14 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			continue;
 		}
 		if (err) {		/* swp entry is obsolete ? */
-			radix_tree_preload_end();
 			break;
 		}
 
 		/* May fail (-ENOMEM) if radix-tree node allocation failed. */
 		__SetPageLocked(new_page);
 		__SetPageSwapBacked(new_page);
-		err = __add_to_swap_cache(new_page, entry, &shadow);
+		err = __add_to_swap_cache(new_page, entry, &shadow, gfp_mask);
 		if (likely(!err)) {
-			radix_tree_preload_end();
 			/*
 			 * Initiate read into locked page and return.
 			 */
