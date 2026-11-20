@@ -346,6 +346,7 @@ struct vm_area_struct {
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	seqcount_t vm_sequence;		/* VMA metadata sequence for SPF */
 	atomic_t vm_ref_count;		/* Pins VMA while SPF inspects it */
+	bool vm_detached;		/* Removed from the mm VMA tree */
 #endif
 
 	ANDROID_KABI_RESERVE(1);
