@@ -409,6 +409,7 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	while (vma) {
 		struct vm_area_struct *next = vma->vm_next;
 		unsigned long addr = vma->vm_start;
+		bool vm_write_started = !vm_write_is_active(vma);
 
 		/*
 		 * Hide vma from rmap and truncate_pagecache before freeing
@@ -416,10 +417,10 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		 * detach through the final page-table flush. Other callers
 		 * start a short sequence update for anon_vma teardown.
 		 */
-		if (!vm_write_is_active(vma))
+		if (vm_write_started)
 			vm_write_begin(vma);
 		unlink_anon_vmas(vma);
-		if (READ_ONCE(vma->vm_sequence.sequence) & 1)
+		if (vm_write_started)
 			vm_write_end(vma);
 		unlink_file_vma(vma);
 
@@ -432,12 +433,15 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			 */
 			while (next && next->vm_start <= vma->vm_end + PMD_SIZE
 			       && !is_vm_hugetlb_page(next)) {
+				bool vm_write_started;
+
 				vma = next;
 				next = vma->vm_next;
-				if (!vm_write_is_active(vma))
+				vm_write_started = !vm_write_is_active(vma);
+				if (vm_write_started)
 					vm_write_begin(vma);
 				unlink_anon_vmas(vma);
-				if (READ_ONCE(vma->vm_sequence.sequence) & 1)
+				if (vm_write_started)
 					vm_write_end(vma);
 				unlink_file_vma(vma);
 			}
