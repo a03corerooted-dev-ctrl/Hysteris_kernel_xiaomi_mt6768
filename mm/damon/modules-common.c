@@ -140,10 +140,18 @@ int damon_modules_start_paddr(struct damon_ctx *ctx)
 		err = -EINVAL;
 		goto out;
 	}
-	/* Recover the shared monitor if its worker exited unexpectedly. */
 	if (!damon_modules_ctx_running(ctx)) {
 		struct damon_ctx *ctxs[] = { ctx };
 
+		/*
+		 * A dead worker destroys its adaptive regions.  Require all
+		 * policy users to stop first, so the next first-user parameter
+		 * commit can restore the shared target before restarting.
+		 */
+		if (damon_modules_paddr_users) {
+			err = -EIO;
+			goto out;
+		}
 		err = damon_start(ctxs, 1, true);
 		if (err)
 			goto out;
@@ -322,6 +330,10 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 	if (!in_kdamond)
 		mutex_lock(&damon_modules_paddr_lock);
 	running = damon_modules_ctx_running(ctx);
+	if (!running && READ_ONCE(damon_modules_paddr_users)) {
+		err = -EIO;
+		goto out;
+	}
 	/*
 	 * Validate live geometry in kdamond, not from the sysfs writer, because
 	 * PADDR's adaptive region list can change concurrently with sampling.
@@ -330,6 +342,7 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 	/* A live shared monitor already has the common target and attributes. */
 	commit.update_ctx = !running;
 	err = damon_modules_commit_policy(&commit, in_kdamond);
+out:
 	if (!in_kdamond)
 		mutex_unlock(&damon_modules_paddr_lock);
 	return err;
