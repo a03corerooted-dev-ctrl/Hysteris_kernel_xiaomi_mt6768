@@ -38,10 +38,12 @@ Design constraints
 
 1. Keep the existing split-LRU path as the safe fallback.
 2. Keep policy experiments opt-in until they build and pass runtime tests.
-3. Do not run multiple victim-selection policies concurrently against the
-   same LRU lists.  Alternative page-replacement policies must be isolated
-   and selectable for comparison; their metadata and reclaim hooks must not
-   corrupt the baseline lists or workingset accounting.
+3. Do not run multiple independent PADDR samplers against the same
+   physical pages.  DAMON_RECLAIM and DAMON_LRU_SORT may run together only
+   through the shared PADDR context: they consume one access-observation
+   stream while retaining separate DAMOS schemes, quotas, parameters, and
+   statistics.  Their LRU actions must preserve the classic list invariants
+   and workingset refault history.
 4. Treat proactive monitoring/reclaim as a separate layer from ordinary
    page-granularity reclaim.  A monitor-based scheme must have bounded CPU and
    pageout quotas, sensible memory-pressure activation thresholds, and a
@@ -58,6 +60,21 @@ layer, not a replacement for the split-LRU reclaimer.  A 4.19 backport must be
 treated as a real subsystem port: the upstream DAMON_RECLAIM series was
 developed against a v5.15-rc5 tree and touched 13 files, so copying only the
 reclaim module or enabling a Kconfig symbol would be incomplete.
+
+The Hysteris integration keeps DAMON_RECLAIM and DAMON_LRU_SORT as separate
+policies but shares one PADDR monitoring context between them.  This is
+required because PADDR sampling clears page access state; independent monitor
+threads would otherwise interfere with each other's observations.  Policy
+updates replace only the schemes owned by that policy, and disabling one
+policy does not stop the monitor while the other remains enabled.
+
+The PADDR LRU-deprioritization path records the file-page workingset marker
+when it actually demotes an active page.  Direct DAMON pageout also preserves
+the marker for active file pages before entering shrink_page_list().  The
+existing workingset shadow-entry and refault implementation remains the
+authority for refault-based activation; DAMON does not introduce a parallel
+refault heuristic.
+
 
 Validation
 ==========

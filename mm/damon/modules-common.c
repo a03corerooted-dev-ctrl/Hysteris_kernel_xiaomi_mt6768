@@ -141,7 +141,7 @@ int damon_modules_start_paddr(struct damon_ctx *ctx)
 	if (!damon_modules_paddr_users) {
 		struct damon_ctx *ctxs[] = { ctx };
 
-		err = damon_start(ctxs, 1, false);
+		err = damon_start(ctxs, 1, true);
 		if (err)
 			goto out;
 	}
