@@ -43,16 +43,4 @@ config DAMON_LRU_SORT
 	  file-backed pages.  Disabled by default at runtime; enable through
 	  damon_lru_sort.enabled.
 
-
-config DAMON_COMBO
-	bool "Combined DAMON reclaim and LRU policy"
-	depends on DAMON_PADDR
-	help
-	  Run proactive pageout, hot-page promotion, and cold-page
-	  deactivation as schemes of one DAMON physical-address context.
-	  This avoids competing PADDR access-bit sampling by independent
-	  DAMON_RECLAIM and DAMON_LRU_SORT workers.  Enable at runtime via
-	  damon_combo.enabled.  Do not enable the independent policy workers
-	  at the same time.
-
 endmenu
