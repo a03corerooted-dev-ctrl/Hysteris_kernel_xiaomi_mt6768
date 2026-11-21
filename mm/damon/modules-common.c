@@ -129,6 +129,8 @@ int damon_modules_register_paddr_callbacks(struct damon_ctx *ctx,
 	return err;
 }
 
+static bool damon_modules_ctx_running(struct damon_ctx *ctx);
+
 int damon_modules_start_paddr(struct damon_ctx *ctx)
 {
 	int err = 0;
@@ -138,7 +140,8 @@ int damon_modules_start_paddr(struct damon_ctx *ctx)
 		err = -EINVAL;
 		goto out;
 	}
-	if (!damon_modules_paddr_users) {
+	/* Recover the shared monitor if its worker exited unexpectedly. */
+	if (!damon_modules_ctx_running(ctx)) {
 		struct damon_ctx *ctxs[] = { ctx };
 
 		err = damon_start(ctxs, 1, true);
@@ -161,7 +164,8 @@ int damon_modules_stop_paddr(struct damon_ctx *ctx)
 		goto out;
 	}
 	damon_modules_paddr_users--;
-	if (!damon_modules_paddr_users) {
+	if (!damon_modules_paddr_users &&
+			damon_modules_ctx_running(ctx)) {
 		struct damon_ctx *ctxs[] = { ctx };
 
 		err = damon_stop(ctxs, 1);
