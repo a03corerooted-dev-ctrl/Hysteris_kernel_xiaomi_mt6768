@@ -179,12 +179,20 @@ struct damon_modules_policy_commit {
 	enum damos_action *actions;
 	int nr_actions;
 	bool update_ctx;
+	bool validate_shared;
 };
 
 static int damon_modules_commit_policy_in_kdamond(void *data)
 {
 	struct damon_modules_policy_commit *commit = data;
 	int err;
+
+	if (commit->validate_shared &&
+			(!damon_modules_same_attrs(&commit->ctx->attrs,
+					&commit->param_ctx->attrs) ||
+			 !damon_modules_same_regions(commit->ctx,
+					commit->param_ctx)))
+		return -EINVAL;
 
 	err = damon_commit_schemes_for_actions(commit->ctx,
 			commit->param_ctx, commit->actions,
@@ -269,10 +277,11 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 	if (ctx != damon_modules_paddr_ctx)
 		return -EINVAL;
 	running = damon_modules_ctx_running(ctx);
-	if (running && (!damon_modules_same_attrs(&ctx->attrs,
-					&param_ctx->attrs) ||
-			!damon_modules_same_regions(ctx, param_ctx)))
-		return -EINVAL;
+	/*
+	 * Validate live geometry in kdamond, not from the sysfs writer, because
+	 * PADDR's adaptive region list can change concurrently with sampling.
+	 */
+	commit.validate_shared = running;
 	/* A live shared monitor already has the common target and attributes. */
 	commit.update_ctx = !running;
 	return damon_modules_commit_policy(&commit, in_kdamond);
