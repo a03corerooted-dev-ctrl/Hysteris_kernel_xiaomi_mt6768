@@ -67,6 +67,13 @@ required because PADDR sampling clears page access state; independent monitor
 threads would otherwise interfere with each other's observations.  Policy
 updates replace only the schemes owned by that policy, and disabling one
 policy does not stop the monitor while the other remains enabled.
+  The shared monitor retains exclusive ownership of the global PADDR
+sampler while it is active, preventing unrelated DAMON contexts from racing
+the same access bits.
+
+The common scheme order is deterministic regardless of built-in init order:
+hot-page promotion (``DAMOS_LRU_PRIO``), cold-page demotion
+(``DAMOS_LRU_DEPRIO``), then proactive pageout (``DAMOS_PAGEOUT``).
 
 The PADDR LRU-deprioritization path records the file-page workingset marker
 when it actually demotes an active page.  Direct DAMON pageout also preserves
