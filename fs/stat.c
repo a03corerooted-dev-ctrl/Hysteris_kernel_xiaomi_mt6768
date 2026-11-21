@@ -18,6 +18,9 @@
 #include <linux/pagemap.h>
 #include <linux/compat.h>
 #ifdef CONFIG_KSU_SUSFS
+#include <linux/jump_label.h>
+#endif
+#ifdef CONFIG_KSU_SUSFS
 #include <linux/susfs_def.h>
 #endif
 
@@ -216,12 +219,23 @@ EXPORT_SYMBOL(vfs_statx_fd);
  *
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_su_compat_enabled;
+extern bool __ksu_is_allow_uid_for_current(uid_t uid);
+extern int ksu_handle_stat(int *dfd, struct filename **filename_ptr, int *flags);
+extern int filename_lookup(int dfd, struct filename *name, unsigned flags,
+			   struct path *path, struct path *root);
+#endif
+
 int vfs_statx(int dfd, const char __user *filename, int flags,
 	      struct kstat *stat, u32 request_mask)
 {
 	struct path path;
 	int error = -EINVAL;
 	unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;
+#ifdef CONFIG_KSU_SUSFS
+	struct filename *fname = NULL;
+#endif
 
 	if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
 		       AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
@@ -235,7 +249,20 @@ int vfs_statx(int dfd, const char __user *filename, int flags,
 		lookup_flags |= LOOKUP_EMPTY;
 
 retry:
+#ifdef CONFIG_KSU_SUSFS
+	fname = getname_flags(filename, lookup_flags, NULL);
+	if (IS_ERR(fname)) {
+		error = PTR_ERR(fname);
+		goto out;
+	}
+	if (!susfs_is_current_proc_no_su() &&
+	    static_branch_likely(&ksu_su_compat_enabled) &&
+	    __ksu_is_allow_uid_for_current(current_uid().val))
+		ksu_handle_stat(&dfd, &fname, &flags);
+	error = filename_lookup(dfd, fname, lookup_flags, &path, NULL);
+#else
 	error = user_path_at(dfd, filename, lookup_flags, &path);
+#endif
 	if (error)
 		goto out;
 
