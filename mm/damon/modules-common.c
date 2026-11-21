@@ -300,6 +300,7 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 		int nr_actions, bool in_kdamond)
 {
 	bool running;
+	int err;
 	struct damon_modules_policy_commit commit = {
 		.ctx = ctx,
 		.param_ctx = param_ctx,
@@ -309,6 +310,13 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 
 	if (ctx != damon_modules_paddr_ctx)
 		return -EINVAL;
+	/*
+	 * Serialize external updates with context start/stop.  A callback already
+	 * running on kdamond must not take this lock, because stop waits for that
+	 * thread to finish.
+	 */
+	if (!in_kdamond)
+		mutex_lock(&damon_modules_paddr_lock);
 	running = damon_modules_ctx_running(ctx);
 	/*
 	 * Validate live geometry in kdamond, not from the sysfs writer, because
@@ -317,7 +325,10 @@ int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
 	commit.validate_shared = running;
 	/* A live shared monitor already has the common target and attributes. */
 	commit.update_ctx = !running;
-	return damon_modules_commit_policy(&commit, in_kdamond);
+	err = damon_modules_commit_policy(&commit, in_kdamond);
+	if (!in_kdamond)
+		mutex_unlock(&damon_modules_paddr_lock);
+	return err;
 }
 
 int damon_modules_remove_paddr_policy(struct damon_ctx *ctx,
@@ -334,11 +345,16 @@ int damon_modules_remove_paddr_policy(struct damon_ctx *ctx,
 
 	if (ctx != damon_modules_paddr_ctx)
 		return -EINVAL;
+	mutex_lock(&damon_modules_paddr_lock);
 	empty_ctx = damon_new_ctx();
-	if (!empty_ctx)
-		return -ENOMEM;
+	if (!empty_ctx) {
+		err = -ENOMEM;
+		goto out;
+	}
 	commit.param_ctx = empty_ctx;
 	err = damon_modules_commit_policy(&commit, false);
 	damon_destroy_ctx(empty_ctx);
+out:
+	mutex_unlock(&damon_modules_paddr_lock);
 	return err;
 }
