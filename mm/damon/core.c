@@ -1024,6 +1024,81 @@ static int damon_commit_schemes(struct damon_ctx *dst, struct damon_ctx *src)
 	return 0;
 }
 
+static bool damon_action_in_list(enum damos_action action,
+		enum damos_action *actions, int nr_actions)
+{
+	int i;
+
+	for (i = 0; i < nr_actions; i++)
+		if (actions[i] == action)
+			return true;
+	return false;
+}
+
+/*
+ * Replace only schemes owned by the selected policy actions.  This allows
+ * independent DAMOS policies to share one monitoring context and one set of
+ * PADDR access observations without overwriting each other's schemes.
+ */
+int damon_commit_schemes_for_actions(struct damon_ctx *dst,
+		struct damon_ctx *src, enum damos_action *actions,
+		int nr_actions)
+{
+	struct damos *dst_scheme, *next, *src_scheme, *new_scheme;
+	int i = 0, j = 0, err;
+
+	damon_for_each_scheme_safe(dst_scheme, next, dst) {
+		if (!damon_action_in_list(dst_scheme->action, actions,
+					nr_actions))
+			continue;
+		src_scheme = NULL;
+		{
+			int n = 0;
+			struct damos *candidate;
+
+			damon_for_each_scheme(candidate, src) {
+				if (!damon_action_in_list(candidate->action,
+							actions, nr_actions))
+					continue;
+				if (n++ == i) {
+					src_scheme = candidate;
+					break;
+				}
+			}
+		}
+		i++;
+		if (src_scheme) {
+			err = damos_commit(dst_scheme, src_scheme);
+			if (err)
+				return err;
+		} else {
+			damon_destroy_scheme(dst_scheme);
+		}
+	}
+
+	damon_for_each_scheme(src_scheme, src) {
+		if (!damon_action_in_list(src_scheme->action, actions,
+					nr_actions))
+			continue;
+		if (j++ < i)
+			continue;
+		new_scheme = damon_new_scheme(&src_scheme->pattern,
+				src_scheme->action,
+				src_scheme->apply_interval_us,
+				&src_scheme->quota, &src_scheme->wmarks,
+				src_scheme->target_nid);
+		if (!new_scheme)
+			return -ENOMEM;
+		err = damos_commit(new_scheme, src_scheme);
+		if (err) {
+			damon_destroy_scheme(new_scheme);
+			return err;
+		}
+		damon_add_scheme(dst, new_scheme);
+	}
+	return 0;
+}
+
 static struct damon_target *damon_nth_target(int n, struct damon_ctx *ctx)
 {
 	struct damon_target *t;
@@ -1142,22 +1217,17 @@ static int damon_commit_targets(
  * This function should be called from parameters-update safe context, like
  * DAMON callbacks.
  */
-int damon_commit_ctx(struct damon_ctx *dst, struct damon_ctx *src)
+int damon_commit_ctx_without_schemes(struct damon_ctx *dst,
+		struct damon_ctx *src)
 {
 	int err;
 
-	err = damon_commit_schemes(dst, src);
-	if (err)
-		return err;
 	err = damon_commit_targets(dst, src);
 	if (err)
 		return err;
 	/*
-	 * schemes and targets should be updated first, since
-	 * 1. damon_set_attrs() updates monitoring results of targets and
-	 * next_apply_sis of schemes, and
-	 * 2. ops update should be done after pid handling is done (target
-	 *    committing require putting pids).
+	 * Targets should be updated before attributes.  The operations update
+	 * must be done after target PID handling is complete.
 	 */
 	err = damon_set_attrs(dst, &src->attrs);
 	if (err)
@@ -1165,6 +1235,16 @@ int damon_commit_ctx(struct damon_ctx *dst, struct damon_ctx *src)
 	dst->ops = src->ops;
 
 	return 0;
+}
+
+int damon_commit_ctx(struct damon_ctx *dst, struct damon_ctx *src)
+{
+	int err;
+
+	err = damon_commit_schemes(dst, src);
+	if (err)
+		return err;
+	return damon_commit_ctx_without_schemes(dst, src);
 }
 
 /**

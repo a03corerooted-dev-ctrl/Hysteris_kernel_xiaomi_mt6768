@@ -6,6 +6,7 @@
  */
 
 #include <linux/moduleparam.h>
+#include <linux/damon.h>
 
 #define DEFINE_DAMON_MODULES_MON_ATTRS_PARAMS(attrs)			\
 	module_param_named(sample_interval, attrs.sample_interval,	\
@@ -47,3 +48,16 @@
 
 int damon_modules_new_paddr_ctx_target(struct damon_ctx **ctxp,
 		struct damon_target **targetp);
+
+/* Shared PADDR context for independent DAMON policy modules. */
+int damon_modules_get_shared_paddr_ctx_target(struct damon_ctx **ctxp,
+		struct damon_target **targetp);
+int damon_modules_register_paddr_callbacks(struct damon_ctx *ctx,
+		struct damon_callback *callback);
+int damon_modules_start_paddr(struct damon_ctx *ctx);
+int damon_modules_stop_paddr(struct damon_ctx *ctx);
+int damon_modules_commit_paddr_policy(struct damon_ctx *ctx,
+		struct damon_ctx *param_ctx, enum damos_action *actions,
+		int nr_actions, bool in_kdamond);
+int damon_modules_remove_paddr_policy(struct damon_ctx *ctx,
+		enum damos_action *actions, int nr_actions);

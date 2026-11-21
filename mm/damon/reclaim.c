@@ -192,7 +192,7 @@ static struct damos *damon_reclaim_new_scheme(void)
 			NUMA_NO_NODE);
 }
 
-static int damon_reclaim_apply_parameters(void)
+static int damon_reclaim_apply_parameters(bool in_kdamond)
 {
 	struct damon_ctx *param_ctx;
 	struct damon_target *param_target;
@@ -243,7 +243,12 @@ static int damon_reclaim_apply_parameters(void)
 					&monitor_region_end);
 	if (err)
 		goto out;
-	err = damon_commit_ctx(ctx, param_ctx);
+	{
+		static enum damos_action actions[] = { DAMOS_PAGEOUT };
+
+		err = damon_modules_commit_paddr_policy(ctx, param_ctx,
+				actions, ARRAY_SIZE(actions), in_kdamond);
+	}
 out:
 	damon_destroy_ctx(param_ctx);
 	return err;
@@ -254,17 +259,29 @@ static int damon_reclaim_turn(bool on)
 	int err;
 
 	if (!on) {
-		err = damon_stop(&ctx, 1);
+		static enum damos_action actions[] = { DAMOS_PAGEOUT };
+
+		err = damon_modules_remove_paddr_policy(ctx, actions,
+				ARRAY_SIZE(actions));
+		if (err)
+			return err;
+		err = damon_modules_stop_paddr(ctx);
 		if (!err)
 			kdamond_pid = -1;
 		return err;
 	}
 
-	err = damon_reclaim_apply_parameters();
+	err = damon_reclaim_apply_parameters(false);
 	if (err)
 		return err;
 
-	err = damon_start(&ctx, 1, true);
+	err = damon_modules_start_paddr(ctx);
+	if (err) {
+		static enum damos_action actions[] = { DAMOS_PAGEOUT };
+
+		damon_modules_remove_paddr_policy(ctx, actions,
+				ARRAY_SIZE(actions));
+	}
 	if (err)
 		return err;
 	kdamond_pid = ctx->kdamond->pid;
@@ -314,7 +331,7 @@ static int damon_reclaim_handle_commit_inputs(void)
 	if (!commit_inputs)
 		return 0;
 
-	err = damon_reclaim_apply_parameters();
+	err = damon_reclaim_apply_parameters(true);
 	commit_inputs = false;
 	return err;
 }
@@ -324,8 +341,10 @@ static int damon_reclaim_after_aggregation(struct damon_ctx *c)
 	struct damos *s;
 
 	/* update the stats parameter */
-	damon_for_each_scheme(s, c)
-		damon_reclaim_stat = s->stat;
+	damon_for_each_scheme(s, c) {
+		if (s->action == DAMOS_PAGEOUT)
+			damon_reclaim_stat = s->stat;
+	}
 
 	return damon_reclaim_handle_commit_inputs();
 }
@@ -337,13 +356,18 @@ static int damon_reclaim_after_wmarks_check(struct damon_ctx *c)
 
 static int __init damon_reclaim_init(void)
 {
-	int err = damon_modules_new_paddr_ctx_target(&ctx, &target);
+	struct damon_callback callback = {
+		.after_wmarks_check = damon_reclaim_after_wmarks_check,
+		.after_aggregation = damon_reclaim_after_aggregation,
+	};
+	int err;
 
+	err = damon_modules_get_shared_paddr_ctx_target(&ctx, &target);
 	if (err)
 		return err;
-
-	ctx->callback.after_wmarks_check = damon_reclaim_after_wmarks_check;
-	ctx->callback.after_aggregation = damon_reclaim_after_aggregation;
+	err = damon_modules_register_paddr_callbacks(ctx, &callback);
+	if (err)
+		return err;
 
 	/* 'enabled' has set before this function, probably via command line */
 	if (enabled)
