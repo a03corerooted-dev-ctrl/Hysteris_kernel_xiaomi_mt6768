@@ -463,12 +463,11 @@ static inline unsigned long damon_pa_mark_accessed_or_deactivate(
 			mark_page_accessed(page);
 		else
 			/*
-			 * Hysteris 4.19 exposes the generic deactivate_page()
-			 * helper (mm/swap.c), which handles both anonymous and
-			 * file-backed active pages.  Use it instead of the no-op
-			 * required by some other 4.19 vendor trees.
+			 * Keep file-page workingset history when DAMON demotes
+			 * a hot page, so workingset_refault() can still make an
+			 * informed activation decision after a later eviction.
 			 */
-			deactivate_page(page);
+			deactivate_page_workingset(page);
 		applied += hpage_nr_pages(page);
 put_page:
 		addr += PAGE_SIZE << compound_order(page);

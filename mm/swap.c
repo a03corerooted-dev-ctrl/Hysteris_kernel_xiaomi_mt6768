@@ -549,6 +549,13 @@ static void lru_deactivate_fn(struct page *page, struct lruvec *lruvec,
 		del_page_from_lru_list(page, lruvec, lru + LRU_ACTIVE);
 		ClearPageActive(page);
 		ClearPageReferenced(page);
+		/*
+		 * DAMON's cold-page sorting feeds pages to the same reclaim
+		 * path as normal active-list aging.  Preserve file workingset
+		 * history so a later shadow-entry refault can restore it.
+		 */
+		if (arg && file)
+			SetPageWorkingset(page);
 		add_page_to_lru_list(page, lruvec, lru);
 
 		__count_vm_events(PGDEACTIVATE, hpage_nr_pages(page));
@@ -660,6 +667,27 @@ void deactivate_page(struct page *page)
 		get_page(page);
 		if (!pagevec_add(pvec, page) || PageCompound(page))
 			pagevec_lru_move_fn(pvec, lru_deactivate_fn, NULL);
+		put_cpu_var(lru_deactivate_pvecs);
+	}
+}
+
+/*
+ * DAMON-specific variant of deactivate_page().  It keeps the workingset bit
+ * for file pages that are actually moved from active to inactive, matching
+ * shrink_active_list()'s refault-history semantics without changing callers
+ * of the generic deactivate_page() helper.
+ */
+void deactivate_page_workingset(struct page *page)
+{
+	static const bool keep_workingset = true;
+
+	if (PageLRU(page) && PageActive(page) && !PageUnevictable(page)) {
+		struct pagevec *pvec = &get_cpu_var(lru_deactivate_pvecs);
+
+		get_page(page);
+		if (!pagevec_add(pvec, page) || PageCompound(page))
+			pagevec_lru_move_fn(pvec, lru_deactivate_fn,
+					(void *)&keep_workingset);
 		put_cpu_var(lru_deactivate_pvecs);
 	}
 }

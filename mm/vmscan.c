@@ -1582,6 +1582,14 @@ unsigned long damon_reclaim_pages_from_list(struct list_head *page_list)
 			else
 				nr_isolated_anon += nr_pages;
 
+			/*
+			 * DAMON reclaim can bypass shrink_active_list() when
+			 * directly isolating an active file page.  Preserve the
+			 * workingset marker that normal active-list aging would
+			 * have recorded before shrink_page_list() evicts it.
+			 */
+			if (PageActive(page) && page_is_file_cache(page))
+				SetPageWorkingset(page);
 			ClearPageActive(page);
 			list_move(&page->lru, &node_pages);
 		}

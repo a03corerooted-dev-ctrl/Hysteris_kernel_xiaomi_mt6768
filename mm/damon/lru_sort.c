@@ -271,6 +271,7 @@ static int damon_lru_sort_turn(bool on)
 	err = damon_lru_sort_apply_parameters(false);
 	if (err)
 		return err;
+	commit_inputs = false;
 
 	err = damon_modules_start_paddr(ctx);
 	if (err) {
@@ -329,6 +330,10 @@ static int damon_lru_sort_handle_commit_inputs(void)
 
 	if (!commit_inputs)
 		return 0;
+	if (!enabled) {
+		commit_inputs = false;
+		return 0;
+	}
 
 	err = damon_lru_sort_apply_parameters(true);
 	commit_inputs = false;

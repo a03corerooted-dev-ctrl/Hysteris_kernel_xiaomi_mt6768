@@ -274,6 +274,7 @@ static int damon_reclaim_turn(bool on)
 	err = damon_reclaim_apply_parameters(false);
 	if (err)
 		return err;
+	commit_inputs = false;
 
 	err = damon_modules_start_paddr(ctx);
 	if (err) {
@@ -330,6 +331,10 @@ static int damon_reclaim_handle_commit_inputs(void)
 
 	if (!commit_inputs)
 		return 0;
+	if (!enabled) {
+		commit_inputs = false;
+		return 0;
+	}
 
 	err = damon_reclaim_apply_parameters(true);
 	commit_inputs = false;
