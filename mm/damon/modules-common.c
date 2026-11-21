@@ -182,6 +182,11 @@ struct damon_modules_policy_commit {
 	bool validate_shared;
 };
 
+static bool damon_modules_same_attrs(struct damon_attrs *a,
+		struct damon_attrs *b);
+static bool damon_modules_same_regions(struct damon_ctx *a,
+		struct damon_ctx *b);
+
 static int damon_modules_commit_policy_in_kdamond(void *data)
 {
 	struct damon_modules_policy_commit *commit = data;
