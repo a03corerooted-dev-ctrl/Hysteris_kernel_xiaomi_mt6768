@@ -187,6 +187,31 @@ static bool damon_modules_same_attrs(struct damon_attrs *a,
 static bool damon_modules_same_regions(struct damon_ctx *a,
 		struct damon_ctx *b);
 
+/*
+ * Keep cross-policy action order independent of built-in initcall order:
+ * first protect hot pages, then demote cold pages, and finally reclaim the
+ * coldest eligible pages.  All three still consume the same DAMON samples.
+ */
+static void damon_modules_order_paddr_schemes(struct damon_ctx *ctx)
+{
+	static const enum damos_action order[] = {
+		DAMOS_LRU_PRIO,
+		DAMOS_LRU_DEPRIO,
+		DAMOS_PAGEOUT,
+	};
+	struct damos *scheme, *next;
+	LIST_HEAD(ordered);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(order); i++) {
+		damon_for_each_scheme_safe(scheme, next, ctx) {
+			if (scheme->action == order[i])
+				list_move_tail(&scheme->list, &ordered);
+		}
+	}
+	list_splice_tail(&ordered, &ctx->schemes);
+}
+
 static int damon_modules_commit_policy_in_kdamond(void *data)
 {
 	struct damon_modules_policy_commit *commit = data;
@@ -202,8 +227,11 @@ static int damon_modules_commit_policy_in_kdamond(void *data)
 	err = damon_commit_schemes_for_actions(commit->ctx,
 			commit->param_ctx, commit->actions,
 			commit->nr_actions);
-	if (err || !commit->update_ctx)
+	if (err)
 		return err;
+	damon_modules_order_paddr_schemes(commit->ctx);
+	if (!commit->update_ctx)
+		return 0;
 	return damon_commit_ctx_without_schemes(commit->ctx,
 			commit->param_ctx);
 }
