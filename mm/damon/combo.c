@@ -117,14 +117,13 @@ static int damon_combo_apply_parameters(void)
 		.max_sz_region = ULONG_MAX,
 		.min_nr_accesses = 0,
 		.max_nr_accesses = 0,
-		.min_age_region = min_age / damon_combo_attrs.aggr_interval,
+		.min_age_region = 0,
 		.max_age_region = UINT_MAX,
 	};
 	struct damos_access_pattern hot_pattern = {
 		.min_sz_region = PAGE_SIZE,
 		.max_sz_region = ULONG_MAX,
-		.min_nr_accesses = damon_max_nr_accesses(&damon_combo_attrs) *
-			hot_thres_access_freq / 1000,
+		.min_nr_accesses = 0,
 		.max_nr_accesses = UINT_MAX,
 		.min_age_region = 0,
 		.max_age_region = UINT_MAX,
@@ -134,8 +133,7 @@ static int damon_combo_apply_parameters(void)
 		.max_sz_region = ULONG_MAX,
 		.min_nr_accesses = 0,
 		.max_nr_accesses = 0,
-		.min_age_region = cold_min_age /
-			damon_combo_attrs.aggr_interval,
+		.min_age_region = 0,
 		.max_age_region = UINT_MAX,
 	};
 	struct damos *schemes[3];
@@ -147,9 +145,22 @@ static int damon_combo_apply_parameters(void)
 	if (err)
 		return err;
 
+	if (!damon_combo_attrs.sample_interval ||
+			!damon_combo_attrs.aggr_interval ||
+			hot_thres_access_freq > 1000) {
+		err = -EINVAL;
+		goto out;
+	}
 	err = damon_set_attrs(param_ctx, &damon_combo_attrs);
 	if (err)
 		goto out;
+
+	reclaim_pattern.min_age_region = min_age /
+		damon_combo_attrs.aggr_interval;
+	hot_pattern.min_nr_accesses = damon_max_nr_accesses(
+			&damon_combo_attrs) * hot_thres_access_freq / 1000;
+	cold_pattern.min_age_region = cold_min_age /
+		damon_combo_attrs.aggr_interval;
 
 	schemes[0] = damon_combo_new_scheme(&reclaim_pattern, DAMOS_PAGEOUT,
 			&reclaim_quota, &reclaim_wmarks);
@@ -306,3 +317,6 @@ static int __init damon_combo_init(void)
 }
 
 module_init(damon_combo_init);
+
+MODULE_DESCRIPTION("Combined DAMON reclaim and LRU policy");
+MODULE_LICENSE("GPL");
